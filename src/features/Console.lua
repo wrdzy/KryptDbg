@@ -216,6 +216,14 @@ function Console.mount(ctx)
         end
         state.renderDirty = false
 
+        -- Only keep following the newest line when the user is already parked at
+        -- the bottom; otherwise leave their scroll position alone so they can
+        -- read earlier output while logs keep streaming in.
+        local distanceFromBottom = output.AbsoluteCanvasSize.Y
+            - output.AbsoluteWindowSize.Y
+            - output.CanvasPosition.Y
+        local followTail = distanceFromBottom <= 48
+
         local filtered = {}
         for _, entry in ipairs(state.logs) do
             if matches(entry) then
@@ -245,11 +253,13 @@ function Console.mount(ctx)
         end
 
         countLabel.Text = ("OUTPUT · %d / %d"):format(#filtered, #state.logs)
-        task.defer(function()
-            if output.Parent then
-                output.CanvasPosition = Vector2.new(0, math.max(0, output.AbsoluteCanvasSize.Y))
-            end
-        end)
+        if followTail then
+            task.defer(function()
+                if output.Parent then
+                    output.CanvasPosition = Vector2.new(0, math.max(0, output.AbsoluteCanvasSize.Y))
+                end
+            end)
+        end
     end
 
     scheduleRender = function()

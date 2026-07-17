@@ -899,7 +899,7 @@ function KryptUI.new(options)
     KryptUI.corner(statusDot, 7)
     local statusText = KryptUI.label({
         Position = UDim2.fromOffset(26, 0),
-        Size = UDim2.new(1, -450, 1, 0),
+        Size = UDim2.new(1, -474, 1, 0),
         Text = "Ready",
         TextColor3 = Theme.textMuted,
         TextSize = 11,
@@ -1071,6 +1071,14 @@ function KryptUI.new(options)
             local delta = input.Position - resizeStart
             local positionNow = resizePosition
             local sizeNow = resizeSize
+            -- The edges opposite a west/north drag stay fixed. Capture them so
+            -- we can re-anchor after clamping; otherwise, once the size clamps
+            -- to the minimum the window slides across the screen instead of
+            -- stopping.
+            local rightEdge = resizePosition.X + resizeSize.X
+            local bottomEdge = resizePosition.Y + resizeSize.Y
+            local anchorWest = resizeDirection:find("W", 1, true) ~= nil
+            local anchorNorth = resizeDirection:find("N", 1, true) ~= nil
 
             if resizeDirection:find("E", 1, true) then
                 sizeNow = Vector2.new(resizeSize.X + delta.X, sizeNow.Y)
@@ -1078,16 +1086,24 @@ function KryptUI.new(options)
             if resizeDirection:find("S", 1, true) then
                 sizeNow = Vector2.new(sizeNow.X, resizeSize.Y + delta.Y)
             end
-            if resizeDirection:find("W", 1, true) then
+            if anchorWest then
                 positionNow = Vector2.new(resizePosition.X + delta.X, positionNow.Y)
                 sizeNow = Vector2.new(resizeSize.X - delta.X, sizeNow.Y)
             end
-            if resizeDirection:find("N", 1, true) then
+            if anchorNorth then
                 positionNow = Vector2.new(positionNow.X, resizePosition.Y + delta.Y)
                 sizeNow = Vector2.new(sizeNow.X, resizeSize.Y - delta.Y)
             end
 
             clampWindow(root, positionNow, sizeNow, self.minimum, self.maximum)
+
+            if anchorWest or anchorNorth then
+                local anchoredX = anchorWest
+                    and rightEdge - root.Size.X.Offset or root.Position.X.Offset
+                local anchoredY = anchorNorth
+                    and bottomEdge - root.Size.Y.Offset or root.Position.Y.Offset
+                root.Position = UDim2.fromOffset(anchoredX, anchoredY)
+            end
         elseif dragInput then
             local delta = input.Position - dragStart
             local nextPosition = Vector2.new(
