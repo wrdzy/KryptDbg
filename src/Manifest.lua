@@ -1,6 +1,6 @@
 return {
     name = "KryptDbg",
-    version = "1.3.0",
+    version = "1.4.0",
     ui = "src/KryptUI.lua",
     core = "src/Runtime.lua",
     defaultFeature = "Explorer",

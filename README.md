@@ -118,10 +118,14 @@ KryptUI is custom code and does not embed those libraries.
 
 - Live Explorer, nil-instance, property, attribute, and script-source controls
 - Creates `KryptDbg/DUMP` in the executor workspace at startup
-- Produces `summary.md` (overview with a class breakdown and usage guide),
+- Produces `summary.md` (overview with class/location breakdown and usage guide),
   `game.json`, `session.json` (local player, character, camera, and world
-  state), `instances.jsonl`, `remotes.jsonl` (every remote and bindable with
-  its path), `scripts/index.jsonl`, and available bounded `scripts/*.lua` files
+  state), `locations.jsonl` (named world points with labels, categories, tags,
+  and coordinates), `instances.jsonl` (raw path + readable path, tags, and
+  position), `remotes.jsonl`, `scripts/index.jsonl`, and bounded
+  `scripts/*.lua` files named with parent context
+- Collapses GUID/streaming folder names into `readablePath` values such as
+  `Workspace.STORE_DONUT.Prompt`
 - Uses Potassium's `getproperties` when present, with curated class-aware
   property discovery as a compatibility fallback
 - Streams large JSONL output with `appendfile` when supported
@@ -129,8 +133,9 @@ KryptUI is custom code and does not embed those libraries.
 
 The dump is designed as a searchable client-side snapshot for debugging an
 experience you own or are authorized to test. Start an AI review with
-`summary.md` and `game.json`, then provide only the relevant JSONL records and
-script files.
+`summary.md`, `locations.jsonl`, and `game.json`, then provide only the
+relevant JSONL records and script files. Prefer `readablePath` over raw
+`path` when searching.
 
 ## Shortcuts
 

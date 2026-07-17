@@ -6,7 +6,15 @@ local MAX_SCRIPTS = 1000
 local MAX_SOURCE_CHARS = 500000
 local MAX_PROPERTIES_PER_INSTANCE = 180
 local MAX_REMOTES = 8000
+local MAX_LOCATIONS = 8000
 local FLUSH_EVERY = 200
+
+local TAG_CATEGORIES = {
+    SmallStore = "store",
+    RobberyMarker = "robberyMarker",
+    Vehicle = "vehicle",
+    VehicleSeat = "vehicleSeat",
+}
 
 -- Instances worth surfacing in their own index because they define the
 -- client/server (and client-internal) call surface an AI most often needs.
@@ -157,6 +165,151 @@ local function safePath(instance)
     return safeString(ok and fullName or instance.Name)
 end
 
+local function looksLikeOpaqueId(name)
+    local text = tostring(name)
+    if #text == 36 and text:match(
+        "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$"
+    ) then
+        return true
+    end
+    if #text >= 32 and #text <= 40 and text:find("%-", 1, true) and text:match("^[%x%-]+$") then
+        return true
+    end
+    return false
+end
+
+local function readablePath(instance)
+    if instance == game then
+        return "game"
+    end
+    local chain = {}
+    local current = instance
+    while current and current ~= game do
+        table.insert(chain, 1, current)
+        current = current.Parent
+    end
+    local segments = {}
+    for _, node in ipairs(chain) do
+        local name = tostring(node.Name)
+        if node.Parent == game or not looksLikeOpaqueId(name) then
+            table.insert(segments, safeString(name))
+        end
+    end
+    if #segments == 0 then
+        return safeString(instance.Name)
+    end
+    return table.concat(segments, ".")
+end
+
+local function humanizeName(name)
+    local text = tostring(name)
+    text = text:gsub("^STORE_", "")
+    text = text:gsub("_+", " ")
+    text = text:gsub("%s+", " ")
+    text = text:gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then
+        return safeString(name)
+    end
+    return safeString(text)
+end
+
+local function getWorldPosition(instance)
+    local partOk, isPart = pcall(instance.IsA, instance, "BasePart")
+    if partOk and isPart then
+        local position = instance.Position
+        return {
+            x = safeNumber(position.X),
+            y = safeNumber(position.Y),
+            z = safeNumber(position.Z),
+        }
+    end
+    local modelOk, isModel = pcall(instance.IsA, instance, "Model")
+    if modelOk and isModel then
+        local pivotOk, pivot = pcall(function()
+            return instance:GetPivot()
+        end)
+        if pivotOk and pivot then
+            local position = pivot.Position
+            return {
+                x = safeNumber(position.X),
+                y = safeNumber(position.Y),
+                z = safeNumber(position.Z),
+            }
+        end
+    end
+    local attachmentOk, isAttachment = pcall(instance.IsA, instance, "Attachment")
+    if attachmentOk and isAttachment then
+        local worldOk, worldPosition = pcall(function()
+            return instance.WorldPosition
+        end)
+        if worldOk and worldPosition then
+            return {
+                x = safeNumber(worldPosition.X),
+                y = safeNumber(worldPosition.Y),
+                z = safeNumber(worldPosition.Z),
+            }
+        end
+    end
+    return nil
+end
+
+local function getInstanceTags(instance, collectionService)
+    if not collectionService then
+        return nil
+    end
+    local ok, tags = pcall(collectionService.GetTags, collectionService, instance)
+    if not ok or type(tags) ~= "table" or #tags == 0 then
+        return nil
+    end
+    local cleaned = table.create(#tags)
+    for index = 1, #tags do
+        cleaned[index] = safeString(tags[index])
+    end
+    return cleaned
+end
+
+local function classifyLocation(name, tags, attributes, className, parentName)
+    if tags then
+        for _, tag in ipairs(tags) do
+            local category = TAG_CATEGORIES[tag]
+            if category then
+                return category
+            end
+        end
+        if #tags > 0 then
+            return "tagged"
+        end
+    end
+    if type(attributes) == "table" then
+        if attributes.RobberyStatus ~= nil then
+            return "robbery"
+        end
+        if attributes.VehicleStateUserId ~= nil then
+            return "vehicle"
+        end
+    end
+    if name:sub(1, 6) == "STORE_" then
+        return "store"
+    end
+    if className == "RemoteEvent" and name == "RobRemote" then
+        return "storeRemote"
+    end
+    if (name == "Prompt" or name == "Register" or name == "NPC")
+        and type(parentName) == "string"
+        and parentName:sub(1, 6) == "STORE_"
+    then
+        return "storePoint"
+    end
+    if name == "Donut" or name == "Grocery" or name == "Gas"
+        or name == "Bank" or name == "Jewelry" or name == "Museum"
+        or name == "PowerPlant" or name == "MoneyTruck" or name == "Mansion"
+        or name == "OilRig" or name == "Tomb" or name == "Casino"
+    then
+        return "robberyMarker"
+    end
+    return nil
+end
+
 local function cleanFileName(value)
     local clean = tostring(value):gsub('[<>:"/\\|%?%*%c]', "_")
     clean = clean:gsub("^%s+", ""):gsub("%s+$", ""):gsub("%.+$", "")
@@ -164,6 +317,22 @@ local function cleanFileName(value)
         clean = "unnamed"
     end
     return clean:sub(1, 80)
+end
+
+local function scriptFileStem(readable, name)
+    local parts = {}
+    for part in string.gmatch(tostring(readable or ""), "[^%.]+") do
+        if part ~= "game" and not looksLikeOpaqueId(part) then
+            table.insert(parts, part)
+        end
+    end
+    if #parts >= 2 then
+        return cleanFileName(parts[#parts - 1] .. "_" .. parts[#parts])
+    end
+    if #parts == 1 then
+        return cleanFileName(parts[1])
+    end
+    return cleanFileName(name)
 end
 
 local function encodeValue(value, depth, seen)
@@ -185,6 +354,7 @@ local function encodeValue(value, depth, seen)
             type = "Instance",
             className = safeString(value.ClassName),
             path = safePath(value),
+            readablePath = readablePath(value),
         }
     elseif kind == "Vector2" then
         return { type = kind, x = safeNumber(value.X), y = safeNumber(value.Y) }
@@ -705,10 +875,16 @@ function Settings.mount(ctx)
                 end
                 local instancesPath = rootPath .. "/instances.jsonl"
                 local remotesPath = rootPath .. "/remotes.jsonl"
+                local locationsPath = rootPath .. "/locations.jsonl"
                 local scriptIndexPath = rootPath .. "/scripts/index.jsonl"
                 write(instancesPath, "")
                 write(remotesPath, "")
+                write(locationsPath, "")
                 write(scriptIndexPath, "")
+                local collectionService
+                pcall(function()
+                    collectionService = game:GetService("CollectionService")
+                end)
 
                 local buffered = {}
                 local function appendLines(path, lines)
@@ -740,11 +916,15 @@ function Settings.mount(ctx)
                 local seen = setmetatable({}, { __mode = "k" })
                 local scripts = {}
                 local remotes = {}
+                local locations = {}
                 local classCounts = {}
                 local remoteCount = 0
                 local bindableCount = 0
                 local nilInstanceCount = 0
+                local locationCount = 0
                 local instanceLines = {}
+                local locationLines = {}
+                local usedScriptNames = {}
                 local head = 1
                 local count = 0
                 local truncated = false
@@ -778,18 +958,27 @@ function Settings.mount(ctx)
                         local className = tostring(instance.ClassName)
                         classCounts[className] = (classCounts[className] or 0) + 1
 
+                        local rawPath = instance == game and "game" or safePath(instance)
+                        local cleanPath = instance == game and "game" or readablePath(instance)
                         local record = {
                             id = id,
                             parentId = item.parentId,
                             name = safeString(instance.Name),
                             className = className,
-                            path = instance == game and "game" or safePath(instance),
+                            path = rawPath,
+                            readablePath = cleanPath,
                             nilInstance = item.nilInstance == true,
                         }
+                        local tags = getInstanceTags(instance, collectionService)
+                        if tags then
+                            record.tags = tags
+                        end
+                        local encodedAttributes
                         if ctx.settings.dumpAttributes and instance ~= game then
                             local attributeOk, attributes = pcall(instance.GetAttributes, instance)
                             if attributeOk and next(attributes) then
-                                record.attributes = encodeValue(attributes)
+                                encodedAttributes = encodeValue(attributes)
+                                record.attributes = encodedAttributes
                             end
                         end
                         if ctx.settings.dumpProperties and instance ~= game then
@@ -798,16 +987,21 @@ function Settings.mount(ctx)
                                 record.properties = properties
                             end
                         end
+                        local position = getWorldPosition(instance)
+                        if position then
+                            record.position = position
+                        end
                         local encodedRecord = safeEncode(record)
                         if not encodedRecord then
-                            -- Almost always an attribute/property value; keep the
-                            -- structural record so the tree stays complete.
                             encodedRecord = safeEncode({
                                 id = record.id,
                                 parentId = record.parentId,
                                 name = record.name,
                                 className = record.className,
                                 path = record.path,
+                                readablePath = record.readablePath,
+                                tags = record.tags,
+                                position = record.position,
                                 nilInstance = record.nilInstance,
                                 encodeError = "attributes/properties omitted (unencodable value)",
                             })
@@ -819,6 +1013,44 @@ function Settings.mount(ctx)
                         if record.nilInstance then
                             nilInstanceCount = nilInstanceCount + 1
                         end
+
+                        local parentName = instance.Parent and tostring(instance.Parent.Name) or nil
+                        local locationCategory = classifyLocation(
+                            record.name,
+                            tags,
+                            encodedAttributes,
+                            className,
+                            parentName
+                        )
+                        if locationCategory and locationCount < MAX_LOCATIONS then
+                            locationCount = locationCount + 1
+                            local locationRecord = {
+                                instanceId = id,
+                                name = record.name,
+                                label = humanizeName(record.name),
+                                category = locationCategory,
+                                className = className,
+                                path = record.path,
+                                readablePath = record.readablePath,
+                                tags = tags,
+                                position = position,
+                                attributes = encodedAttributes,
+                                nilInstance = record.nilInstance,
+                            }
+                            if parentName and parentName:sub(1, 6) == "STORE_" then
+                                locationRecord.parentLabel = humanizeName(parentName)
+                                locationRecord.parentName = safeString(parentName)
+                            end
+                            local encodedLocation = safeEncode(locationRecord)
+                            if encodedLocation then
+                                table.insert(locationLines, encodedLocation)
+                                table.insert(locations, locationRecord)
+                            end
+                            if #locationLines >= FLUSH_EVERY then
+                                appendLines(locationsPath, locationLines)
+                            end
+                        end
+
                         local remoteKind = REMOTE_CLASSES[className]
                         if remoteKind then
                             if remoteKind == "server" then
@@ -832,6 +1064,7 @@ function Settings.mount(ctx)
                                     name = record.name,
                                     className = className,
                                     path = record.path,
+                                    readablePath = record.readablePath,
                                     kind = remoteKind,
                                     nilInstance = record.nilInstance,
                                 })
@@ -848,6 +1081,7 @@ function Settings.mount(ctx)
                                 instance = instance,
                                 instanceId = id,
                                 path = record.path,
+                                readablePath = record.readablePath,
                                 className = className,
                                 name = record.name,
                             })
@@ -884,6 +1118,7 @@ function Settings.mount(ctx)
                     truncated = true
                 end
                 appendLines(instancesPath, instanceLines)
+                appendLines(locationsPath, locationLines)
 
                 local remoteLines = {}
                 for _, remote in ipairs(remotes) do
@@ -930,19 +1165,31 @@ function Settings.mount(ctx)
                             source = source:sub(1, MAX_SOURCE_CHARS)
                             sourceTruncated = true
                         end
+                        local stem = scriptFileStem(item.readablePath, item.name)
                         filename = ("%04d_%s_%s.lua"):format(
                             index,
                             cleanFileName(item.className),
-                            cleanFileName(item.name)
+                            stem
                         )
+                        if usedScriptNames[filename] then
+                            filename = ("%04d_%s_%s_%d.lua"):format(
+                                index,
+                                cleanFileName(item.className),
+                                stem,
+                                item.instanceId
+                            )
+                        end
+                        usedScriptNames[filename] = true
                         write(scriptsPath .. "/" .. filename, source)
                         dumpedSources = dumpedSources + 1
                     end
                     local encodedScript = safeEncode({
                         instanceId = item.instanceId,
                         name = safeString(item.name),
+                        label = humanizeName(item.name),
                         className = item.className,
                         path = safeString(item.path),
+                        readablePath = safeString(item.readablePath or item.path),
                         file = filename,
                         sourceMethod = sourceMethod,
                         truncated = sourceTruncated,
@@ -990,11 +1237,23 @@ function Settings.mount(ctx)
                     pcall(function()
                         if localPlayer.Team then
                             info.teamPath = safePath(localPlayer.Team)
+                            info.teamReadablePath = readablePath(localPlayer.Team)
+                            info.teamName = safeString(localPlayer.Team.Name)
                         end
+                    end)
+                    pcall(function()
+                        local teamValue = localPlayer:FindFirstChild("TeamValue")
+                        if teamValue and teamValue:IsA("StringValue") then
+                            info.teamValue = safeString(teamValue.Value)
+                        end
+                    end)
+                    pcall(function()
+                        info.hasEscaped = localPlayer:GetAttribute("HasEscaped") == true
                     end)
                     local character = localPlayer.Character
                     if character then
                         info.characterPath = safePath(character)
+                        info.characterReadablePath = readablePath(character)
                         local humanoid = character:FindFirstChildOfClass("Humanoid")
                         if humanoid then
                             info.humanoid = {
@@ -1049,7 +1308,11 @@ function Settings.mount(ctx)
                     if focus then
                         session.focusInstance = {
                             path = safePath(focus),
+                            readablePath = readablePath(focus),
                             className = tostring(focus.ClassName),
+                            name = safeString(focus.Name),
+                            label = humanizeName(focus.Name),
+                            position = getWorldPosition(focus),
                         }
                     end
                 end)
@@ -1086,6 +1349,7 @@ function Settings.mount(ctx)
                     remoteCount = remoteCount,
                     bindableCount = bindableCount,
                     remoteIndexCount = #remotes,
+                    locationCount = locationCount,
                     nilInstanceCount = nilInstanceCount,
                     distinctClassCount = (function()
                         local total = 0
@@ -1100,6 +1364,7 @@ function Settings.mount(ctx)
                         "game.json",
                         "session.json",
                         "instances.jsonl",
+                        "locations.jsonl",
                         "remotes.jsonl",
                         "scripts/index.jsonl",
                     },
@@ -1154,6 +1419,7 @@ function Settings.mount(ctx)
                     ("- Scripts indexed: %d (%d sources saved)"):format(#scripts, dumpedSources),
                     ("- Client/server remotes: %d"):format(remoteCount),
                     ("- Bindable events/functions: %d"):format(bindableCount),
+                    ("- Named locations: %d"):format(locationCount),
                     ("- Nil-parented instances: %d"):format(nilInstanceCount),
                     "",
                     "## Files",
@@ -1161,10 +1427,11 @@ function Settings.mount(ctx)
                     "- `summary.md`: this overview — start here.",
                     "- `game.json`: place metadata, options, counts, limits, and the file list.",
                     "- `session.json`: local player, character, camera, and world state.",
-                    "- `instances.jsonl`: one instance per line with hierarchy IDs, attributes, and properties.",
-                    "- `remotes.jsonl`: every RemoteEvent/RemoteFunction and Bindable with its path.",
-                    "- `scripts/index.jsonl`: script paths and source-file mapping.",
-                    "- `scripts/*.lua`: available bounded script sources.",
+                    "- `locations.jsonl`: named world points with labels, categories, tags, and positions.",
+                    "- `instances.jsonl`: one instance per line with hierarchy IDs, readable paths, tags, positions, attributes, and properties.",
+                    "- `remotes.jsonl`: every RemoteEvent/RemoteFunction and Bindable with raw and readable paths.",
+                    "- `scripts/index.jsonl`: script paths, labels, and source-file mapping.",
+                    "- `scripts/*.lua`: available bounded script sources (named with parent context).",
                     "",
                     "## Top classes",
                     "",
@@ -1181,14 +1448,73 @@ function Settings.mount(ctx)
                         )
                     )
                 end
+                table.insert(summary, "")
+                table.insert(summary, "## Named locations")
+                table.insert(summary, "")
+                if #locations == 0 then
+                    table.insert(summary, "- None indexed.")
+                else
+                    local byCategory = {}
+                    for _, location in ipairs(locations) do
+                        local category = location.category or "other"
+                        byCategory[category] = (byCategory[category] or 0) + 1
+                    end
+                    local categoryList = {}
+                    for category, amount in pairs(byCategory) do
+                        table.insert(categoryList, { category = category, amount = amount })
+                    end
+                    table.sort(categoryList, function(left, right)
+                        if left.amount == right.amount then
+                            return left.category < right.category
+                        end
+                        return left.amount > right.amount
+                    end)
+                    for _, entry in ipairs(categoryList) do
+                        table.insert(
+                            summary,
+                            ("- %s x %d"):format(entry.category, entry.amount)
+                        )
+                    end
+                    table.insert(summary, "")
+                    table.insert(summary, "### Sample locations")
+                    table.insert(summary, "")
+                    for index = 1, math.min(#locations, 40) do
+                        local location = locations[index]
+                        local positionText = "no position"
+                        if location.position then
+                            positionText = ("(%.1f, %.1f, %.1f)"):format(
+                                location.position.x,
+                                location.position.y,
+                                location.position.z
+                            )
+                        end
+                        table.insert(
+                            summary,
+                            ("- `%s` · %s · `%s` · %s"):format(
+                                location.label or location.name,
+                                location.category or "other",
+                                location.readablePath or location.path,
+                                positionText
+                            )
+                        )
+                    end
+                    if #locations > 40 then
+                        table.insert(
+                            summary,
+                            ("- ... and %d more (see locations.jsonl)"):format(#locations - 40)
+                        )
+                    end
+                end
                 for _, line in ipairs({
                     "",
                     "## How to use this dump",
                     "",
                     "1. Read this summary and `game.json` for shape and scale.",
-                    "2. Use `remotes.jsonl` to map the client/server surface.",
-                    "3. Search `instances.jsonl` by class or path for the subsystem you care about.",
-                    "4. Open only the relevant `scripts/*.lua` via `scripts/index.jsonl`.",
+                    "2. Use `locations.jsonl` for human labels, categories, tags, and coordinates.",
+                    "3. Prefer `readablePath` over raw `path` when GUID streaming folders appear.",
+                    "4. Use `remotes.jsonl` to map the client/server surface.",
+                    "5. Search `instances.jsonl` by readablePath, tags, or name for the subsystem you care about.",
+                    "6. Open only the relevant `scripts/*.lua` via `scripts/index.jsonl`.",
                     "",
                     "Treat every runtime value as a client-side snapshot from a single moment.",
                 }) do
@@ -1201,6 +1527,7 @@ function Settings.mount(ctx)
                     scripts = #scripts,
                     sources = dumpedSources,
                     remotes = remoteCount,
+                    locations = locationCount,
                     truncated = truncated,
                 }
             end)
@@ -1218,9 +1545,10 @@ function Settings.mount(ctx)
             if ok then
                 folderLabel.Text = result.path
                 dumpStatus.Text = (
-                    "Dump complete.\n%d instances | %d scripts | %d sources | %d remotes%s"
+                    "Dump complete.\n%d instances | %d locations | %d scripts | %d sources | %d remotes%s"
                 ):format(
                     result.count,
+                    result.locations or 0,
                     result.scripts,
                     result.sources,
                     result.remotes,
