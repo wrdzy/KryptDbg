@@ -9,6 +9,7 @@ local CAPABILITIES = {
     { "getnilinstances", "Nil-instance Explorer roots" },
     { "saveinstance", "Place/model serialization" },
     { "writefile", "Local source export" },
+    { "getcustomasset", "Bundled Lucide icon loading", { "getsynasset" } },
     { "loadstring", "Console command execution" },
     { "gethui", "Protected UI parent" },
     { "getcallingscript", "Calling-script metadata" },
@@ -25,22 +26,40 @@ function Diagnostics.mount(ctx)
         frameCount = 0,
         frameTotal = 0,
         elapsed = 0,
+        statsElapsed = 2,
+        memory = nil,
+        ping = nil,
     }
+    local saveLoader
+
+    ctx:cleanup(function()
+        if saveLoader then
+            saveLoader:destroy()
+            saveLoader = nil
+        end
+    end)
 
     local toolbar = UI.toolbar(page)
     local copyButton = UI.button({
+        Icon = "copy",
         Parent = toolbar,
         Text = "Copy report",
         TextColor3 = Theme.cyan,
-        Width = 92,
+        Width = 104,
     })
     local saveButton = UI.button({
+        Icon = "save",
         Parent = toolbar,
         Text = "Save instance",
         TextColor3 = Theme.green,
-        Width = 96,
+        Width = 110,
     })
-    local refreshButton = UI.button({ Parent = toolbar, Text = "Refresh", Width = 72 })
+    local refreshButton = UI.button({
+        Icon = "refresh-cw",
+        Parent = toolbar,
+        Text = "Refresh",
+        Width = 84,
+    })
     local summary = UI.label({
         Size = UDim2.fromOffset(330, 30),
         Text = "Capability-gated runtime overview",
@@ -278,16 +297,21 @@ function Diagnostics.mount(ctx)
                 Radius = 6,
                 StrokeColor = loaded and Theme.accentSoft or Theme.borderSoft,
             })
-            UI.label({
+            local iconTile = UI.create("Frame", {
                 BackgroundColor3 = loaded and Theme.accentSoft or Theme.surfaceRaised,
-                BackgroundTransparency = 0,
-                Font = Enum.Font.GothamBold,
+                BorderSizePixel = 0,
                 Position = UDim2.fromOffset(8, 10),
                 Size = UDim2.fromOffset(30, 30),
-                Text = feature.icon,
-                TextColor3 = loaded and Theme.cyan or Theme.textFaint,
-                TextSize = 8,
                 Parent = row,
+            })
+            UI.corner(iconTile, 6)
+            UI.icon({
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Color = loaded and Theme.cyan or Theme.textFaint,
+                Icon = feature.icon,
+                Position = UDim2.fromScale(0.5, 0.5),
+                Size = UDim2.fromOffset(16, 16),
+                Parent = iconTile,
             })
             UI.label({
                 Font = Enum.Font.GothamMedium,
@@ -340,7 +364,8 @@ function Diagnostics.mount(ctx)
         state.frameCount = state.frameCount + 1
         state.frameTotal = state.frameTotal + deltaTime
         state.elapsed = state.elapsed + deltaTime
-        if state.elapsed < 0.5 then
+        state.statsElapsed = state.statsElapsed + deltaTime
+        if state.elapsed < 0.75 then
             return
         end
 
@@ -349,6 +374,10 @@ function Diagnostics.mount(ctx)
         state.frameCount = 0
         state.frameTotal = 0
         state.elapsed = 0
+
+        if not ctx:isActive() then
+            return
+        end
 
         fpsValue.Text = ("%d FPS"):format(math.floor(state.fps + 0.5))
         fpsDetail.Text = state.fps >= 55 and "Healthy render cadence" or "Frame rate is below target"
@@ -362,26 +391,32 @@ function Diagnostics.mount(ctx)
             or state.frameTime <= 32 and Theme.yellow
             or Theme.red
 
-        local memory = memoryText()
-        memoryValue.Text = memory and ("%.0f MB"):format(memory) or "N/A"
-        memoryDetail.Text = memory and "Total client memory" or "Stats API unavailable"
-        memoryValue.TextColor3 = memory and Theme.cyan or Theme.textMuted
+        if state.statsElapsed >= 2 then
+            state.statsElapsed = 0
+            state.memory = memoryText()
+            state.ping = pingText()
+        end
 
-        local ping = pingText()
-        pingValue.Text = ping or "N/A"
-        pingDetail.Text = ping and "Data ping reported by Stats" or "Network metric unavailable"
-        pingValue.TextColor3 = ping and Theme.cyan or Theme.textMuted
+        memoryValue.Text = state.memory and ("%.0f MB"):format(state.memory) or "N/A"
+        memoryDetail.Text = state.memory and "Total client memory" or "Stats API unavailable"
+        memoryValue.TextColor3 = state.memory and Theme.cyan or Theme.textMuted
+
+        pingValue.Text = state.ping or "N/A"
+        pingDetail.Text = state.ping and "Data ping reported by Stats" or "Network metric unavailable"
+        pingValue.TextColor3 = state.ping and Theme.cyan or Theme.textMuted
     end
 
     local function report()
+        local memory = memoryText()
+        local ping = pingText()
         local lines = {
             ("KryptDbg %s diagnostics"):format(ctx.app.manifest.version),
             ("Active feature: %s"):format(ctx.app.window.activeTab or "None"),
             ("Loaded modules: %s"):format(table.concat(ctx.app:getLoadedModules(), ", ")),
             ("FPS: %.1f"):format(state.fps),
             ("Frame time: %.2f ms"):format(state.frameTime),
-            ("Memory: %s"):format(memoryText() and ("%.1f MB"):format(memoryText()) or "N/A"),
-            ("Ping: %s"):format(pingText() or "N/A"),
+            ("Memory: %s"):format(memory and ("%.1f MB"):format(memory) or "N/A"),
+            ("Ping: %s"):format(ping or "N/A"),
             "",
             "Capabilities:",
         }
@@ -403,12 +438,27 @@ function Diagnostics.mount(ctx)
         ctx:copy(report(), "Diagnostic report copied")
     end)
     ctx:connect(saveButton.MouseButton1Click, function()
+        if saveLoader then
+            ctx:toast("Save Instance is already running", Theme.yellow)
+            return
+        end
         local supported, _, saveInstance = resolveCapability({ "saveinstance", "" })
         if not supported then
             ctx:toast("saveinstance is unavailable", Theme.red)
             return
         end
 
+        local loader = UI.loader({
+            BackgroundColor3 = Theme.canvas,
+            BackgroundTransparency = 0.08,
+            Detail = "This can take a while for large places.",
+            Parent = page,
+            Position = UDim2.fromOffset(10, 52),
+            Size = UDim2.new(1, -20, 1, -62),
+            Title = "Saving instance…",
+            ZIndex = 20,
+        })
+        saveLoader = loader
         task.spawn(function()
             ctx:status("Saving instance…", Theme.yellow)
             local ok, message = pcall(saveInstance, {
@@ -417,6 +467,13 @@ function Diagnostics.mount(ctx)
             })
             if not ok then
                 ok, message = pcall(saveInstance)
+            end
+            loader:destroy()
+            if saveLoader == loader then
+                saveLoader = nil
+            end
+            if not ctx.app.alive then
+                return
             end
             if ok then
                 ctx:toast("Save Instance completed", Theme.green)

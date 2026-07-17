@@ -53,6 +53,10 @@ boundaries clear while allowing loaded tools to work together.
 - A dedicated drag region and eight edge/corner resize zones
 - Viewport clamping, minimum/maximum sizing, minimize, and RightShift visibility
 - Status bar, module load indicators, toasts, empty states, and shared primitives
+- Lucide icons delivered through one bundled 5 KB sprite sheet, with Roblox
+  atlas IDs as a compatibility fallback
+- MageCDN Circle Fade loaders for startup, module downloads, bounded scans,
+  source reads, commands, replay, and Save Instance
 - Mouse and touch input support
 
 The component approach was informed by
@@ -120,5 +124,16 @@ dependency exists.
 - Features relying on executor-specific APIs remain disabled when unavailable.
 - Large hierarchies, script indexes, logs, and searches are capped to protect
   frame rate and memory.
+- High-frequency Console and Remotes updates are batched to avoid rebuilding
+  retained UI lists for every event.
+- Long-running scans yield between bounded batches and expose live progress
+  instead of leaving a blank or apparently frozen panel.
 - The suite requires HTTP and `loadstring` support for remote module loading.
 - No stealth, anti-detection, or detection-evasion behavior is included.
+
+## Third-party assets
+
+The interface uses a small sprite and metadata subset from
+[latte-soft/lucide-roblox](https://github.com/latte-soft/lucide-roblox) to
+display [Lucide](https://lucide.dev/) icons in Roblox. See
+`THIRD_PARTY_NOTICES.md` for license details.

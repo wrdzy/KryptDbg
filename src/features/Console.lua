@@ -12,11 +12,20 @@ function Console.mount(ctx)
         logs = {},
         query = "",
         filter = "All",
-        renderPending = false,
+        renderDirty = false,
+        renderScheduled = false,
         history = {},
         historyIndex = 1,
         nextId = 0,
     }
+    local commandLoader
+
+    ctx:cleanup(function()
+        if commandLoader then
+            commandLoader:destroy()
+            commandLoader = nil
+        end
+    end)
 
     local toolbar = UI.toolbar(page)
     local search = UI.input({
@@ -39,10 +48,11 @@ function Console.mount(ctx)
         Width = 60,
     })
     local clearButton = UI.button({
+        Icon = "trash-2",
         Parent = toolbar,
         Text = "Clear",
         TextColor3 = Theme.red,
-        Width = 56,
+        Width = 68,
     })
 
     local outputPanel = UI.panel({
@@ -94,13 +104,14 @@ function Console.mount(ctx)
         BackgroundColor3 = Theme.input,
         PlaceholderText = "Run a Luau expression or statement…",
         Position = UDim2.fromOffset(30, 5),
-        Size = UDim2.new(1, -112, 0, 30),
+        Size = UDim2.new(1, -120, 0, 30),
         TextSize = 11,
     })
     local runButton = UI.button({
+        Icon = "play",
         Parent = commandBar,
-        Position = UDim2.new(1, -76, 0, 5),
-        Size = UDim2.fromOffset(68, 30),
+        Position = UDim2.new(1, -84, 0, 5),
+        Size = UDim2.fromOffset(76, 30),
         Text = "Run",
         TextColor3 = Theme.green,
     })
@@ -117,6 +128,7 @@ function Console.mount(ctx)
     end
 
     local render
+    local scheduleRender
     local function addLog(message, messageType, source)
         local level, color = classify(messageType)
         state.nextId = state.nextId + 1
@@ -133,16 +145,8 @@ function Console.mount(ctx)
             table.remove(state.logs, 1)
         end
 
-        if state.renderPending then
-            return
-        end
-        state.renderPending = true
-        task.defer(function()
-            state.renderPending = false
-            if ctx:isActive() then
-                render()
-            end
-        end)
+        state.renderDirty = true
+        scheduleRender()
     end
 
     local function matches(entry)
@@ -155,13 +159,63 @@ function Console.mount(ctx)
             or entry.source:lower():find(query, 1, true) ~= nil
     end
 
-    render = function()
-        if not ctx:isActive() then
-            state.renderPending = true
-            return
+    local rows = {}
+    local function ensureRow(slotIndex)
+        local existing = rows[slotIndex]
+        if existing then
+            return existing
         end
 
-        UI.clear(output)
+        local row = UI.create("Frame", {
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, 30),
+            Parent = output,
+        })
+        UI.corner(row, 5)
+        local bar = UI.create("Frame", {
+            BorderSizePixel = 0,
+            Position = UDim2.fromOffset(0, 4),
+            Size = UDim2.new(0, 2, 1, -8),
+            Parent = row,
+        })
+        local message = UI.label({
+            Font = Enum.Font.Code,
+            Position = UDim2.fromOffset(9, 4),
+            Size = UDim2.new(1, -92, 1, -8),
+            TextSize = 10,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            Parent = row,
+        })
+        local timestamp = UI.label({
+            AnchorPoint = Vector2.new(1, 0),
+            Font = Enum.Font.Code,
+            Position = UDim2.new(1, -8, 0, 5),
+            Size = UDim2.fromOffset(72, 16),
+            TextColor3 = Theme.textFaint,
+            TextSize = 8,
+            TextXAlignment = Enum.TextXAlignment.Right,
+            Parent = row,
+        })
+
+        local slot = {
+            row = row,
+            bar = bar,
+            message = message,
+            timestamp = timestamp,
+        }
+        rows[slotIndex] = slot
+        return slot
+    end
+
+    render = function()
+        if not ctx:isActive() then
+            state.renderDirty = true
+            return
+        end
+        state.renderDirty = false
+
         local filtered = {}
         for _, entry in ipairs(state.logs) do
             if matches(entry) then
@@ -169,54 +223,45 @@ function Console.mount(ctx)
             end
         end
 
-        local first = math.max(1, #filtered - 179)
+        local first = math.max(1, #filtered - 119)
+        local visibleCount = 0
         for index = first, #filtered do
+            visibleCount = visibleCount + 1
             local entry = filtered[index]
             local height = math.clamp(30 + math.floor(#entry.message / 110) * 13, 30, 82)
-            local row = UI.create("Frame", {
-                BackgroundColor3 = index % 2 == 0 and Theme.surface or Theme.canvas,
-                BorderSizePixel = 0,
-                LayoutOrder = index,
-                Size = UDim2.new(1, 0, 0, height),
-                Parent = output,
-            })
-            UI.corner(row, 5)
-            UI.create("Frame", {
-                BackgroundColor3 = entry.color,
-                BorderSizePixel = 0,
-                Position = UDim2.fromOffset(0, 4),
-                Size = UDim2.new(0, 2, 1, -8),
-                Parent = row,
-            })
-            UI.label({
-                Font = Enum.Font.Code,
-                Position = UDim2.fromOffset(9, 4),
-                Size = UDim2.new(1, -92, 1, -8),
-                Text = entry.message,
-                TextColor3 = entry.color == Theme.textMuted and Theme.text or entry.color,
-                TextSize = 10,
-                TextWrapped = true,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                TextYAlignment = Enum.TextYAlignment.Top,
-                Parent = row,
-            })
-            UI.label({
-                AnchorPoint = Vector2.new(1, 0),
-                Font = Enum.Font.Code,
-                Position = UDim2.new(1, -8, 0, 5),
-                Size = UDim2.fromOffset(72, 16),
-                Text = entry.time,
-                TextColor3 = Theme.textFaint,
-                TextSize = 8,
-                TextXAlignment = Enum.TextXAlignment.Right,
-                Parent = row,
-            })
+            local slot = ensureRow(visibleCount)
+            slot.row.BackgroundColor3 = visibleCount % 2 == 0 and Theme.surface or Theme.canvas
+            slot.row.LayoutOrder = visibleCount
+            slot.row.Size = UDim2.new(1, 0, 0, height)
+            slot.row.Visible = true
+            slot.bar.BackgroundColor3 = entry.color
+            slot.message.Text = entry.message
+            slot.message.TextColor3 = entry.color == Theme.textMuted and Theme.text or entry.color
+            slot.timestamp.Text = entry.time
+        end
+
+        for index = visibleCount + 1, #rows do
+            rows[index].row.Visible = false
         end
 
         countLabel.Text = ("OUTPUT · %d / %d"):format(#filtered, #state.logs)
         task.defer(function()
             if output.Parent then
                 output.CanvasPosition = Vector2.new(0, math.max(0, output.AbsoluteCanvasSize.Y))
+            end
+        end)
+    end
+
+    scheduleRender = function()
+        if state.renderScheduled then
+            return
+        end
+
+        state.renderScheduled = true
+        task.delay(0.14, function()
+            state.renderScheduled = false
+            if state.renderDirty and ctx:isActive() then
+                render()
             end
         end)
     end
@@ -234,6 +279,10 @@ function Console.mount(ctx)
     local loadString = rawget(environment, "loadstring") or loadstring
 
     local function runCommand()
+        if commandLoader then
+            ctx:toast("A command is already running", Theme.yellow)
+            return
+        end
         local text = command.Text
         if text:match("^%s*$") then
             return
@@ -252,18 +301,48 @@ function Console.mount(ctx)
             return
         end
 
+        local loader = UI.loader({
+            BackgroundColor3 = Theme.canvas,
+            BackgroundTransparency = 0.08,
+            Detail = text,
+            Parent = outputPanel,
+            Position = UDim2.fromOffset(0, 34),
+            Size = UDim2.new(1, 0, 1, -34),
+            Title = "Running command…",
+            ZIndex = 20,
+        })
+        commandLoader = loader
         task.spawn(function()
+            local function finish()
+                loader:destroy()
+                if commandLoader == loader then
+                    commandLoader = nil
+                end
+            end
+
             local compileOk, chunk, compileError = pcall(loadString, text, "@KryptDbg/Console")
             if not compileOk then
+                finish()
+                if not ctx.app.alive then
+                    return
+                end
                 addLog(tostring(chunk), Enum.MessageType.MessageError, "Compiler")
                 return
             end
             if not chunk then
+                finish()
+                if not ctx.app.alive then
+                    return
+                end
                 addLog(tostring(compileError), Enum.MessageType.MessageError, "Compiler")
                 return
             end
 
             local results = pack(pcall(chunk))
+            finish()
+            if not ctx.app.alive then
+                return
+            end
             if not results[1] then
                 addLog(tostring(results[2]), Enum.MessageType.MessageError, "Runtime")
                 return
@@ -286,7 +365,8 @@ function Console.mount(ctx)
     end)
     ctx:connect(search:GetPropertyChangedSignal("Text"), function()
         state.query = search.Text
-        render()
+        state.renderDirty = true
+        scheduleRender()
     end)
     ctx:connect(allButton.MouseButton1Click, function()
         setFilter("All")

@@ -168,6 +168,12 @@ function Runtime.start(config)
         shuttingDown = UI.Signal(),
     }
 
+    if type(UI.configureAssets) == "function" then
+        pcall(UI.configureAssets, {
+            fetch = config.fetch,
+        })
+    end
+
     local window = UI.new({
         Name = "KryptDbg",
         Title = manifest.name,

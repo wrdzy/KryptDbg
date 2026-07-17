@@ -196,11 +196,12 @@ function Explorer.mount(ctx)
     local expanded = setmetatable({}, { __mode = "k" })
     local rowByInstance = setmetatable({}, { __mode = "k" })
     local searchToken = 0
-    local refreshPending = false
     local pickMode = false
-    local MAX_ROWS = 700
+    local MAX_ROWS = 320
+    local MAX_SEARCH_ROWS = 180
     local treeConnections = {}
     local propertyConnections = {}
+    local searchLoader
 
     local function disconnectAll(connections)
         for _, connection in ipairs(connections) do
@@ -220,6 +221,10 @@ function Explorer.mount(ctx)
     ctx:cleanup(function()
         disconnectAll(treeConnections)
         disconnectAll(propertyConnections)
+        if searchLoader then
+            searchLoader:destroy()
+            searchLoader = nil
+        end
     end)
 
     local toolbar = UI.toolbar(page)
@@ -229,19 +234,22 @@ function Explorer.mount(ctx)
         Size = UDim2.fromOffset(250, 30),
     })
     local refreshButton = UI.button({
+        Icon = "refresh-cw",
         Parent = toolbar,
         Text = "Refresh",
-        Width = 78,
+        Width = 90,
     })
     local pickButton = UI.button({
+        Icon = "mouse-pointer-2",
         Parent = toolbar,
         Text = "Pick object",
-        Width = 92,
+        Width = 108,
     })
     local copyPathButton = UI.button({
+        Icon = "copy",
         Parent = toolbar,
         Text = "Copy path",
-        Width = 88,
+        Width = 100,
     })
 
     local body = UI.create("Frame", {
@@ -362,6 +370,14 @@ function Explorer.mount(ctx)
                 capped[index] = children[index]
             end
             return capped
+        end
+        return children
+    end
+
+    local function rawChildren(instance)
+        local ok, children = pcall(instance.GetChildren, instance)
+        if not ok then
+            return {}
         end
         return children
     end
@@ -575,8 +591,8 @@ function Explorer.mount(ctx)
         end
     end
 
-    local function makeRow(instance, depth, order)
-        local children = safeChildren(instance)
+    local function makeRow(instance, depth, order, knownChildren)
+        local children = knownChildren or safeChildren(instance)
         local hasChildren = #children > 0
         local row = UI.create("TextButton", {
             AutoButtonColor = false,
@@ -640,7 +656,7 @@ function Explorer.mount(ctx)
         end
     end
 
-    local function searchInstances(query, token)
+    local function searchInstances(query, token, onProgress)
         local matches = {}
         local queue = roots()
         local head = 1
@@ -648,7 +664,7 @@ function Explorer.mount(ctx)
         local normalized = query:lower()
 
         while head <= #queue and visited < 20000 and #matches < 500 do
-            if token ~= searchToken then
+            if token ~= searchToken or not ctx:isActive() then
                 return nil
             end
 
@@ -661,13 +677,18 @@ function Explorer.mount(ctx)
                 table.insert(matches, instance)
             end
 
-            for _, child in ipairs(safeChildren(instance)) do
+            local children = rawChildren(instance)
+            for index = 1, math.min(#children, 2000) do
+                local child = children[index]
                 if #queue < 25000 then
                     table.insert(queue, child)
                 end
             end
 
             if visited % 350 == 0 then
+                if onProgress then
+                    onProgress(visited, #matches)
+                end
                 task.wait()
             end
         end
@@ -680,6 +701,10 @@ function Explorer.mount(ctx)
             return
         end
 
+        if searchLoader then
+            searchLoader:destroy()
+            searchLoader = nil
+        end
         local scrollPosition = tree.CanvasPosition
         disconnectAll(treeConnections)
         UI.clear(tree)
@@ -691,18 +716,43 @@ function Explorer.mount(ctx)
             searchToken = searchToken + 1
             local token = searchToken
             treeTitle.Text = "SEARCHING…"
+            local loader = UI.loader({
+                Detail = "Preparing bounded DataModel scan…",
+                LayoutOrder = 1,
+                Parent = tree,
+                Size = UDim2.new(1, 0, 0, 136),
+                Title = "Searching instances",
+            })
+            searchLoader = loader
             task.spawn(function()
-                local matches, visited = searchInstances(query, token)
+                local matches, visited = searchInstances(query, token, function(scanned, found)
+                    if loader == searchLoader then
+                        loader:setDetail(
+                            ("%d instances scanned · %d matches"):format(scanned, found)
+                        )
+                    end
+                end)
                 if not matches or token ~= searchToken or not ctx:isActive() then
                     return
                 end
 
-                UI.clear(tree)
-                for index, instance in ipairs(matches) do
-                    makeRow(instance, 0, index)
+                loader:destroy()
+                if searchLoader == loader then
+                    searchLoader = nil
                 end
-                treeTitle.Text = ("SEARCH RESULTS · %d"):format(#matches)
-                treeMeta.Text = ("%d instances scanned · capped for responsiveness"):format(visited)
+                UI.clear(tree)
+                local visibleCount = math.min(#matches, MAX_SEARCH_ROWS)
+                for index = 1, visibleCount do
+                    local instance = matches[index]
+                    makeRow(instance, 0, index, {})
+                end
+                treeTitle.Text = ("SEARCH RESULTS · %d / %d SHOWN"):format(
+                    visibleCount,
+                    #matches
+                )
+                treeMeta.Text = ("%d instances scanned · results capped for responsiveness"):format(
+                    visited
+                )
             end)
             return
         end
@@ -712,10 +762,11 @@ function Explorer.mount(ctx)
             if order >= MAX_ROWS then
                 return
             end
+            local children = safeChildren(instance)
             order = order + 1
-            makeRow(instance, depth, order)
+            makeRow(instance, depth, order, children)
             if expanded[instance] then
-                for _, child in ipairs(safeChildren(instance)) do
+                for _, child in ipairs(children) do
                     append(child, depth + 1)
                     if order >= MAX_ROWS then
                         break
@@ -736,24 +787,12 @@ function Explorer.mount(ctx)
         end)
     end
 
-    local function scheduleRefresh()
-        if refreshPending or not ctx:isActive() then
-            return
-        end
-        refreshPending = true
-        task.delay(0.35, function()
-            refreshPending = false
-            if ctx:isActive() then
-                renderTree()
-            end
-        end)
-    end
-
     ctx:connect(refreshButton.MouseButton1Click, renderTree)
     ctx:connect(search:GetPropertyChangedSignal("Text"), function()
         searchToken = searchToken + 1
+        local token = searchToken
         task.delay(0.22, function()
-            if ctx:isActive() then
+            if token == searchToken and ctx:isActive() then
                 renderTree()
             end
         end)
@@ -791,8 +830,6 @@ function Explorer.mount(ctx)
         end
     end)
 
-    ctx:connect(game.DescendantAdded, scheduleRefresh)
-    ctx:connect(game.DescendantRemoving, scheduleRefresh)
     ctx:on("selectionChanged", function(instance, source)
         if source ~= ctx.id then
             renderProperties(instance)
@@ -805,6 +842,12 @@ function Explorer.mount(ctx)
         if id == ctx.id then
             renderTree()
             renderProperties(ctx:getSelection())
+        else
+            searchToken = searchToken + 1
+            if searchLoader then
+                searchLoader:destroy()
+                searchLoader = nil
+            end
         end
     end)
 

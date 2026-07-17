@@ -1,13 +1,13 @@
 return {
     name = "KryptDbg",
-    version = "1.0.0",
+    version = "1.1.0",
     ui = "src/KryptUI.lua",
     core = "src/Runtime.lua",
     defaultFeature = "Explorer",
     features = {
         {
             id = "Explorer",
-            icon = "EX",
+            icon = "folder-tree",
             title = "Explorer",
             description = "Instances and properties",
             path = "src/features/Explorer.lua",
@@ -15,7 +15,7 @@ return {
         },
         {
             id = "Remotes",
-            icon = "RX",
+            icon = "radio",
             title = "Remotes",
             description = "Remote traffic",
             path = "src/features/Remotes.lua",
@@ -23,7 +23,7 @@ return {
         },
         {
             id = "Scripts",
-            icon = "SC",
+            icon = "file-code-2",
             title = "Scripts",
             description = "Script index and source",
             path = "src/features/Scripts.lua",
@@ -31,7 +31,7 @@ return {
         },
         {
             id = "Console",
-            icon = "OUT",
+            icon = "square-terminal",
             title = "Console",
             description = "Output and commands",
             path = "src/features/Console.lua",
@@ -39,7 +39,7 @@ return {
         },
         {
             id = "Diagnostics",
-            icon = "DX",
+            icon = "activity",
             title = "Diagnostics",
             description = "Runtime health",
             path = "src/features/Diagnostics.lua",

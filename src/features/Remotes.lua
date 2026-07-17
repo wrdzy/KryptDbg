@@ -29,7 +29,8 @@ function Remotes.mount(ctx)
         query = "",
         filter = "All",
         nextId = 0,
-        renderPending = false,
+        renderDirty = false,
+        renderScheduled = false,
         maxLogs = 500,
         blockedInstances = setmetatable({}, { __mode = "k" }),
         blockedNames = {},
@@ -37,18 +38,15 @@ function Remotes.mount(ctx)
         excludedNames = {},
         replayThreads = setmetatable({}, { __mode = "k" }),
     }
-    local rowConnections = {}
+    local rowSlots = {}
+    local replayLoader
 
-    local function clearRowConnections()
-        for _, connection in ipairs(rowConnections) do
-            pcall(function()
-                connection:Disconnect()
-            end)
+    ctx:cleanup(function()
+        if replayLoader then
+            replayLoader:destroy()
+            replayLoader = nil
         end
-        table.clear(rowConnections)
-    end
-
-    ctx:cleanup(clearRowConnections)
+    end)
 
     local toolbar = UI.toolbar(page)
     local search = UI.input({
@@ -59,12 +57,18 @@ function Remotes.mount(ctx)
     local allButton = UI.button({ Parent = toolbar, Text = "All", Width = 48 })
     local eventButton = UI.button({ Parent = toolbar, Text = "Events", Width = 64 })
     local functionButton = UI.button({ Parent = toolbar, Text = "Functions", Width = 78 })
-    local pauseButton = UI.button({ Parent = toolbar, Text = "Pause", Width = 66 })
+    local pauseButton = UI.button({
+        Icon = "pause",
+        Parent = toolbar,
+        Text = "Pause",
+        Width = 76,
+    })
     local clearButton = UI.button({
+        Icon = "trash-2",
         Parent = toolbar,
         Text = "Clear",
         TextColor3 = Theme.red,
-        Width = 60,
+        Width = 70,
     })
 
     local body = UI.create("Frame", {
@@ -175,24 +179,32 @@ function Remotes.mount(ctx)
     })
     UI.padding(actions, 8, 8, 6, 6)
     UI.list(actions, Enum.FillDirection.Horizontal, 7)
-    local copyButton = UI.button({ Parent = actions, Text = "Copy code", Width = 82 })
+    local copyButton = UI.button({
+        Icon = "copy",
+        Parent = actions,
+        Text = "Copy code",
+        Width = 94,
+    })
     local replayButton = UI.button({
+        Icon = "play",
         Parent = actions,
         Text = "Run captured",
         TextColor3 = Theme.green,
-        Width = 92,
+        Width = 106,
     })
     local blockButton = UI.button({
+        Icon = "ban",
         Parent = actions,
         Text = "Block exact",
         TextColor3 = Theme.red,
-        Width = 84,
+        Width = 98,
     })
     local excludeButton = UI.button({
+        Icon = "unplug",
         Parent = actions,
         Text = "Exclude exact",
         TextColor3 = Theme.yellow,
-        Width = 90,
+        Width = 106,
     })
 
     local code = UI.input({
@@ -260,6 +272,10 @@ function Remotes.mount(ctx)
             methodBadge.Text = "NO CALL"
             methodBadge.TextColor3 = Theme.textMuted
             code.Text = "-- Select a remote call"
+            blockButton.Text = "Block exact"
+            excludeButton.Text = "Exclude exact"
+            UI.setIcon(blockButton:FindFirstChild("LucideIcon"), "ban", Theme.red)
+            UI.setIcon(excludeButton:FindFirstChild("LucideIcon"), "unplug", Theme.yellow)
             return
         end
 
@@ -274,18 +290,99 @@ function Remotes.mount(ctx)
         methodBadge.TextColor3 = entry.method == "FireServer" and Theme.cyan or Theme.yellow
         code.Text = entry.code or generate(entry)
         entry.code = code.Text
+        local blocked = state.blockedInstances[entry.remote] == true
+        local excluded = state.excludedInstances[entry.remote] == true
+        blockButton.Text = blocked and "Unblock exact" or "Block exact"
+        excludeButton.Text = excluded and "Include exact" or "Exclude exact"
+        UI.setIcon(
+            blockButton:FindFirstChild("LucideIcon"),
+            blocked and "circle-check" or "ban",
+            Theme.red
+        )
+        UI.setIcon(
+            excludeButton:FindFirstChild("LucideIcon"),
+            excluded and "circle-check" or "unplug",
+            Theme.yellow
+        )
         ctx:setSelection(entry.remote)
         render()
     end
 
+    local function ensureRow(slotIndex)
+        local existing = rowSlots[slotIndex]
+        if existing then
+            return existing
+        end
+
+        local row = UI.create("TextButton", {
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, 46),
+            Text = "",
+            Parent = list,
+        })
+        UI.corner(row, 6)
+        local stroke = UI.stroke(row, Theme.borderSoft, 0.45)
+        local badge = UI.label({
+            BackgroundTransparency = 0,
+            Font = Enum.Font.GothamBold,
+            Position = UDim2.fromOffset(7, 7),
+            Size = UDim2.fromOffset(28, 16),
+            TextSize = 7,
+            Parent = row,
+        })
+        UI.corner(badge, 4)
+        local name = UI.label({
+            Font = Enum.Font.GothamMedium,
+            Position = UDim2.fromOffset(42, 4),
+            Size = UDim2.new(1, -84, 0, 20),
+            TextSize = 10,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = row,
+        })
+        local detail = UI.label({
+            Font = Enum.Font.Code,
+            Position = UDim2.fromOffset(42, 23),
+            Size = UDim2.new(1, -84, 0, 16),
+            TextColor3 = Theme.textFaint,
+            TextSize = 8,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = row,
+        })
+        local count = UI.label({
+            AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, -9, 0.5, 0),
+            Size = UDim2.fromOffset(34, 18),
+            TextSize = 8,
+            TextXAlignment = Enum.TextXAlignment.Right,
+            Parent = row,
+        })
+
+        local slot = {
+            row = row,
+            stroke = stroke,
+            badge = badge,
+            name = name,
+            detail = detail,
+            count = count,
+            entry = nil,
+        }
+        rowSlots[slotIndex] = slot
+        ctx:connect(row.MouseButton1Click, function()
+            if slot.entry then
+                selectEntry(slot.entry)
+            end
+        end)
+        return slot
+    end
+
     render = function()
         if not ctx:isActive() then
-            state.renderPending = true
+            state.renderDirty = true
             return
         end
-        state.renderPending = false
-        clearRowConnections()
-        UI.clear(list)
+        state.renderDirty = false
 
         local filtered = {}
         for _, entry in ipairs(state.logs) do
@@ -294,76 +391,49 @@ function Remotes.mount(ctx)
             end
         end
 
-        local first = math.max(1, #filtered - 139)
+        local first = math.max(1, #filtered - 99)
+        local visibleCount = 0
         for index = first, #filtered do
+            visibleCount = visibleCount + 1
             local entry = filtered[index]
             local active = entry == state.selected
-            local row = UI.create("TextButton", {
-                AutoButtonColor = false,
-                BackgroundColor3 = active and Theme.accentSoft or Theme.surface,
-                BorderSizePixel = 0,
-                LayoutOrder = index,
-                Size = UDim2.new(1, 0, 0, 46),
-                Text = "",
-                Parent = list,
-            })
-            UI.corner(row, 6)
-            UI.stroke(row, active and Theme.accent or Theme.borderSoft, active and 0.3 or 0.45)
-            UI.label({
-                BackgroundColor3 = entry.method == "FireServer" and Theme.accentSoft or Theme.surfaceRaised,
-                BackgroundTransparency = 0,
-                Font = Enum.Font.GothamBold,
-                Position = UDim2.fromOffset(7, 7),
-                Size = UDim2.fromOffset(28, 16),
-                Text = entry.method == "FireServer" and "EV" or "FN",
-                TextColor3 = entry.method == "FireServer" and Theme.cyan or Theme.yellow,
-                TextSize = 7,
-                Parent = row,
-            })
-            UI.label({
-                Font = Enum.Font.GothamMedium,
-                Position = UDim2.fromOffset(42, 4),
-                Size = UDim2.new(1, -84, 0, 20),
-                Text = entry.remote.Name,
-                TextSize = 10,
-                TextTruncate = Enum.TextTruncate.AtEnd,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                Parent = row,
-            })
-            UI.label({
-                Font = Enum.Font.Code,
-                Position = UDim2.fromOffset(42, 23),
-                Size = UDim2.new(1, -84, 0, 16),
-                Text = ("%s · %d args"):format(entry.method, entry.args.n or #entry.args),
-                TextColor3 = Theme.textFaint,
-                TextSize = 8,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                Parent = row,
-            })
-            UI.label({
-                AnchorPoint = Vector2.new(1, 0.5),
-                Position = UDim2.new(1, -9, 0.5, 0),
-                Size = UDim2.fromOffset(34, 18),
-                Text = entry.count > 1 and ("×" .. entry.count) or ("#" .. entry.id),
-                TextColor3 = entry.count > 1 and Theme.yellow or Theme.textFaint,
-                TextSize = 8,
-                TextXAlignment = Enum.TextXAlignment.Right,
-                Parent = row,
-            })
-            table.insert(rowConnections, row.MouseButton1Click:Connect(function()
-                selectEntry(entry)
-            end))
+            local slot = ensureRow(visibleCount)
+            slot.entry = entry
+            slot.row.BackgroundColor3 = active and Theme.accentSoft or Theme.surface
+            slot.row.LayoutOrder = visibleCount
+            slot.row.Visible = true
+            slot.stroke.Color = active and Theme.accent or Theme.borderSoft
+            slot.stroke.Transparency = active and 0.3 or 0.45
+            slot.badge.BackgroundColor3 = entry.method == "FireServer"
+                and Theme.accentSoft or Theme.surfaceRaised
+            slot.badge.Text = entry.method == "FireServer" and "EV" or "FN"
+            slot.badge.TextColor3 = entry.method == "FireServer" and Theme.cyan or Theme.yellow
+            slot.name.Text = entry.remote.Name
+            slot.detail.Text = ("%s · %d args"):format(entry.method, entry.args.n or #entry.args)
+            slot.count.Text = entry.count > 1 and ("×" .. entry.count) or ("#" .. entry.id)
+            slot.count.TextColor3 = entry.count > 1 and Theme.yellow or Theme.textFaint
+        end
+
+        for index = visibleCount + 1, #rowSlots do
+            rowSlots[index].entry = nil
+            rowSlots[index].row.Visible = false
         end
 
         countLabel.Text = ("REMOTE TRAFFIC · %d / %d"):format(#filtered, #state.logs)
     end
 
     local function requestRender()
-        if state.renderPending then
+        state.renderDirty = true
+        if state.renderScheduled then
             return
         end
-        state.renderPending = true
-        task.defer(render)
+        state.renderScheduled = true
+        task.delay(0.12, function()
+            state.renderScheduled = false
+            if state.renderDirty and ctx:isActive() then
+                render()
+            end
+        end)
     end
 
     local function isExcluded(remote)
@@ -426,7 +496,10 @@ function Remotes.mount(ctx)
                     and not state.replayThreads[coroutine.running()]
                 then
                     local arguments = pack(...)
-                    task.defer(capture, self, method, arguments)
+                    local captured, captureError = pcall(capture, self, method, arguments)
+                    if not captured then
+                        warn("KryptDbg remote capture failed: " .. tostring(captureError))
+                    end
                     if isBlocked(self) then
                         return nil
                     end
@@ -475,6 +548,11 @@ function Remotes.mount(ctx)
         state.paused = not state.paused
         pauseButton.Text = state.paused and "Resume" or "Pause"
         pauseButton.TextColor3 = state.paused and Theme.yellow or Theme.text
+        UI.setIcon(
+            pauseButton:FindFirstChild("LucideIcon"),
+            state.paused and "play" or "pause",
+            state.paused and Theme.yellow or Theme.textMuted
+        )
         ctx:status(state.paused and "Remote capture paused" or "Remote capture active", Theme.yellow)
     end)
     ctx:connect(clearButton.MouseButton1Click, function()
@@ -490,12 +568,27 @@ function Remotes.mount(ctx)
         end
     end)
     ctx:connect(replayButton.MouseButton1Click, function()
+        if replayLoader then
+            ctx:toast("A captured call is already running", Theme.yellow)
+            return
+        end
         local entry = state.selected
         if not entry then
             ctx:toast("Select a captured call first", Theme.yellow)
             return
         end
 
+        local loader = UI.loader({
+            BackgroundColor3 = Theme.input,
+            BackgroundTransparency = 0.04,
+            Detail = entry.remote.Name .. " · " .. entry.method,
+            Parent = inspector,
+            Position = UDim2.fromOffset(8, 126),
+            Size = UDim2.new(1, -16, 1, -134),
+            Title = "Running captured call…",
+            ZIndex = 20,
+        })
+        replayLoader = loader
         task.spawn(function()
             local thread = coroutine.running()
             state.replayThreads[thread] = true
@@ -503,7 +596,14 @@ function Remotes.mount(ctx)
                 return entry.remote[entry.method](entry.remote, unpackArgs(entry.args))
             end))
             state.replayThreads[thread] = nil
+            loader:destroy()
+            if replayLoader == loader then
+                replayLoader = nil
+            end
 
+            if not ctx.app.alive then
+                return
+            end
             if result[1] then
                 ctx:toast("Captured call completed", Theme.green)
             else
@@ -519,6 +619,11 @@ function Remotes.mount(ctx)
         end
         state.blockedInstances[entry.remote] = not state.blockedInstances[entry.remote]
         blockButton.Text = state.blockedInstances[entry.remote] and "Unblock exact" or "Block exact"
+        UI.setIcon(
+            blockButton:FindFirstChild("LucideIcon"),
+            state.blockedInstances[entry.remote] and "circle-check" or "ban",
+            Theme.red
+        )
         ctx:toast(
             state.blockedInstances[entry.remote] and "Remote blocked" or "Remote unblocked",
             Theme.yellow
@@ -532,13 +637,18 @@ function Remotes.mount(ctx)
         end
         state.excludedInstances[entry.remote] = not state.excludedInstances[entry.remote]
         excludeButton.Text = state.excludedInstances[entry.remote] and "Include exact" or "Exclude exact"
+        UI.setIcon(
+            excludeButton:FindFirstChild("LucideIcon"),
+            state.excludedInstances[entry.remote] and "circle-check" or "unplug",
+            Theme.yellow
+        )
         ctx:toast(
             state.excludedInstances[entry.remote] and "Remote excluded" or "Remote included",
             Theme.yellow
         )
     end)
     ctx:on("activeFeatureChanged", function(id)
-        if id == ctx.id and state.renderPending then
+        if id == ctx.id and state.renderDirty then
             render()
         end
     end)

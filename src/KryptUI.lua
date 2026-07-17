@@ -41,6 +41,96 @@ KryptUI.Metrics = {
 local Theme = KryptUI.Theme
 local Metrics = KryptUI.Metrics
 
+-- Lucide v0.363.0 atlas metadata from latte-soft/lucide-roblox.
+-- Only icons used by KryptDbg are included so the UI stays lightweight.
+local LucideAssets = {
+    -- fallback asset id/offset, followed by bundled atlas offset
+    ["activity"] = { 16898612629, 514, 771, 0, 0 },
+    ["ban"] = { 16898612629, 196, 967, 48, 0 },
+    ["box"] = { 16898612819, 771, 196, 96, 0 },
+    ["bug"] = { 16898612819, 257, 967, 144, 0 },
+    ["circle-check"] = { 16898612819, 869, 955, 192, 0 },
+    ["copy"] = { 16898613044, 918, 612, 240, 0 },
+    ["file-code-2"] = { 16898613353, 918, 0, 288, 0 },
+    ["file-output"] = { 16898613353, 661, 771, 336, 0 },
+    ["folder-tree"] = { 16898613353, 967, 404, 0, 48 },
+    ["locate-fixed"] = { 16898613509, 967, 759, 48, 48 },
+    ["minus"] = { 16898613613, 771, 196, 96, 48 },
+    ["mouse-pointer-2"] = { 16898613613, 820, 661, 144, 48 },
+    ["pause"] = { 16898613699, 0, 771, 192, 48 },
+    ["play"] = { 16898613699, 918, 257, 240, 48 },
+    ["radio"] = { 16898613699, 306, 918, 288, 48 },
+    ["refresh-cw"] = { 16898613699, 404, 869, 336, 48 },
+    ["save"] = { 16898613699, 918, 453, 0, 96 },
+    ["square-terminal"] = { 16898613777, 404, 918, 48, 96 },
+    ["trash-2"] = { 16898613869, 257, 918, 96, 96 },
+    ["unplug"] = { 16898613869, 710, 771, 144, 96 },
+    ["x"] = { 16898613869, 869, 906, 192, 96 },
+}
+local LucideContentId
+local ActiveLoaders = setmetatable({}, { __mode = "k" })
+local loaderAnimationRunning = false
+
+local function startLoaderAnimation()
+    if loaderAnimationRunning then
+        return
+    end
+
+    loaderAnimationRunning = true
+    task.spawn(function()
+        while next(ActiveLoaders) do
+            local phase = math.floor(os.clock() * 8) % 8
+            for frame, state in pairs(ActiveLoaders) do
+                if not frame.Parent then
+                    ActiveLoaders[frame] = nil
+                else
+                    for index, dot in ipairs(state.dots) do
+                        local distance = (index - 1 - phase) % 8
+                        dot.BackgroundTransparency = math.min(0.82, distance * 0.12)
+                    end
+                end
+            end
+            task.wait(0.08)
+        end
+        loaderAnimationRunning = false
+    end)
+end
+
+function KryptUI.configureAssets(options)
+    local config = options or {}
+    local environment = (getgenv and getgenv()) or _G
+    local writeFile = rawget(environment, "writefile") or writefile
+    local getCustomAsset = rawget(environment, "getcustomasset")
+        or rawget(environment, "getsynasset")
+        or getcustomasset
+        or getsynasset
+
+    if type(config.fetch) ~= "function"
+        or type(writeFile) ~= "function"
+        or type(getCustomAsset) ~= "function"
+    then
+        return false
+    end
+
+    local filename = "KryptDbg_lucide_1_1_0.png"
+    local fetched, contents = pcall(config.fetch, "assets/lucide-kryptdbg.png")
+    if not fetched or type(contents) ~= "string" or contents == "" then
+        return false
+    end
+
+    local written = pcall(writeFile, filename, contents)
+    if not written then
+        return false
+    end
+
+    local loaded, contentId = pcall(getCustomAsset, filename)
+    if loaded and type(contentId) == "string" and contentId ~= "" then
+        LucideContentId = contentId
+        return true
+    end
+    return false
+end
+
 function KryptUI.create(className, properties, children)
     local instance = Instance.new(className)
 
@@ -126,7 +216,7 @@ function KryptUI.Signal()
 
         for _, listener in ipairs(self.listeners) do
             if listener.connected then
-                task.spawn(listener.callback, ...)
+                task.defer(listener.callback, ...)
             end
         end
     end
@@ -159,6 +249,44 @@ function KryptUI.label(properties)
     return textObject("TextLabel", properties)
 end
 
+function KryptUI.icon(properties)
+    local options = properties or {}
+    local asset = LucideAssets[options.Icon]
+    assert(asset, "Unknown Lucide icon: " .. tostring(options.Icon))
+
+    return KryptUI.create("ImageLabel", {
+        AnchorPoint = options.AnchorPoint or Vector2.new(0, 0),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Image = LucideContentId or "rbxassetid://" .. asset[1],
+        ImageColor3 = options.ImageColor3 or options.Color or Theme.text,
+        ImageRectOffset = LucideContentId and Vector2.new(asset[4], asset[5])
+            or Vector2.new(asset[2], asset[3]),
+        ImageRectSize = Vector2.new(48, 48),
+        ImageTransparency = options.ImageTransparency or 0,
+        Name = options.Name or "LucideIcon",
+        Position = options.Position or UDim2.fromOffset(0, 0),
+        ScaleType = Enum.ScaleType.Fit,
+        Size = options.Size or UDim2.fromOffset(options.Width or 18, options.Height or 18),
+        ZIndex = options.ZIndex or 1,
+        Parent = options.Parent,
+    })
+end
+
+function KryptUI.setIcon(instance, iconName, color)
+    local asset = LucideAssets[iconName]
+    assert(asset, "Unknown Lucide icon: " .. tostring(iconName))
+    assert(instance and instance:IsA("ImageLabel"), "KryptUI.setIcon requires an ImageLabel")
+
+    instance.Image = LucideContentId or "rbxassetid://" .. asset[1]
+    instance.ImageRectOffset = LucideContentId and Vector2.new(asset[4], asset[5])
+        or Vector2.new(asset[2], asset[3])
+    instance.ImageRectSize = Vector2.new(48, 48)
+    if color then
+        instance.ImageColor3 = color
+    end
+end
+
 function KryptUI.button(properties)
     local options = properties or {}
     local button = textObject("TextButton", {
@@ -169,7 +297,7 @@ function KryptUI.button(properties)
         Font = options.Font or Enum.Font.GothamMedium,
         Position = options.Position or UDim2.fromOffset(0, 0),
         Size = options.Size or UDim2.fromOffset(options.Width or 92, options.Height or 30),
-        Text = options.Text or "Button",
+        Text = options.IconOnly and "" or options.Text or "Button",
         TextColor3 = options.TextColor3 or Theme.text,
         TextSize = options.TextSize or 11,
         LayoutOrder = options.LayoutOrder or 0,
@@ -177,6 +305,22 @@ function KryptUI.button(properties)
     })
     KryptUI.corner(button, options.Radius or 6)
     KryptUI.stroke(button, options.StrokeColor or Theme.border, options.StrokeTransparency or 0.25)
+
+    if options.Icon then
+        local iconSize = options.IconSize or 14
+        local centered = options.IconOnly == true
+        KryptUI.icon({
+            AnchorPoint = centered and Vector2.new(0.5, 0.5) or Vector2.new(0, 0.5),
+            Color = options.IconColor or options.TextColor3 or Theme.textMuted,
+            Icon = options.Icon,
+            Name = "LucideIcon",
+            Position = centered and UDim2.fromScale(0.5, 0.5)
+                or UDim2.new(0, options.IconOffset or 8, 0.5, 0),
+            Size = UDim2.fromOffset(iconSize, iconSize),
+            ZIndex = button.ZIndex + 1,
+            Parent = button,
+        })
+    end
 
     local base = button.BackgroundColor3
     button.MouseEnter:Connect(function()
@@ -314,6 +458,14 @@ function KryptUI.empty(parent, title, detail)
         Size = UDim2.fromScale(1, 1),
         Parent = parent,
     })
+    KryptUI.icon({
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Color = Theme.textFaint,
+        Icon = "box",
+        Position = UDim2.fromScale(0.5, 0.37),
+        Size = UDim2.fromOffset(28, 28),
+        Parent = frame,
+    })
     KryptUI.label({
         AnchorPoint = Vector2.new(0.5, 0.5),
         Font = Enum.Font.GothamBold,
@@ -335,6 +487,116 @@ function KryptUI.empty(parent, title, detail)
         Parent = frame,
     })
     return frame
+end
+
+-- Native adaptation of MageCDN's Circle Fade SVG loader.
+function KryptUI.loader(properties)
+    local options = properties or {}
+    local zIndex = options.ZIndex or 5
+    local frame = KryptUI.create("Frame", {
+        BackgroundColor3 = options.BackgroundColor3 or Theme.canvas,
+        BackgroundTransparency = options.BackgroundTransparency == nil
+            and 1 or options.BackgroundTransparency,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        LayoutOrder = options.LayoutOrder or 0,
+        Position = options.Position or UDim2.fromOffset(0, 0),
+        Size = options.Size or UDim2.fromScale(1, 1),
+        ZIndex = zIndex,
+        Parent = options.Parent,
+    })
+
+    local spinner = KryptUI.create("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundTransparency = 1,
+        Position = options.SpinnerPosition or UDim2.new(0.5, 0, 0.5, -18),
+        Size = UDim2.fromOffset(options.SpinnerSize or 34, options.SpinnerSize or 34),
+        ZIndex = zIndex + 1,
+        Parent = frame,
+    })
+
+    local dots = {}
+    local radius = options.Radius or 12
+    local dotSize = options.DotSize or 5
+    for index = 1, 8 do
+        local angle = math.rad((index - 1) * 45 - 90)
+        local dot = KryptUI.create("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundColor3 = options.Color or Theme.accent,
+            BackgroundTransparency = math.min(0.82, (index - 1) * 0.12),
+            BorderSizePixel = 0,
+            Position = UDim2.new(
+                0.5,
+                math.floor(math.cos(angle) * radius + 0.5),
+                0.5,
+                math.floor(math.sin(angle) * radius + 0.5)
+            ),
+            Size = UDim2.fromOffset(dotSize, dotSize),
+            ZIndex = zIndex + 2,
+            Parent = spinner,
+        })
+        KryptUI.corner(dot, dotSize)
+        dots[index] = dot
+    end
+
+    local title = KryptUI.label({
+        Font = Enum.Font.GothamBold,
+        Position = options.TitlePosition or UDim2.new(0, 16, 0.5, 8),
+        Size = UDim2.new(1, -32, 0, 20),
+        Text = options.Title or "Loading…",
+        TextColor3 = options.TextColor3 or Theme.textMuted,
+        TextSize = options.TitleSize or 12,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        ZIndex = zIndex + 1,
+        Parent = frame,
+    })
+    local detail = KryptUI.label({
+        Position = options.DetailPosition or UDim2.new(0, 24, 0.5, 28),
+        Size = UDim2.new(1, -48, 0, 28),
+        Text = options.Detail or "",
+        TextColor3 = options.DetailColor3 or Theme.textFaint,
+        TextSize = options.DetailSize or 9,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        ZIndex = zIndex + 1,
+        Parent = frame,
+    })
+
+    ActiveLoaders[frame] = {
+        dots = dots,
+    }
+    frame.AncestryChanged:Connect(function(_, parent)
+        if not parent then
+            ActiveLoaders[frame] = nil
+        end
+    end)
+    startLoaderAnimation()
+
+    local controller = {
+        frame = frame,
+    }
+
+    function controller:setTitle(value)
+        if title.Parent then
+            title.Text = tostring(value or "")
+        end
+    end
+
+    function controller:setDetail(value)
+        if detail.Parent then
+            detail.Text = tostring(value or "")
+        end
+    end
+
+    function controller:destroy()
+        ActiveLoaders[frame] = nil
+        if frame.Parent then
+            frame:Destroy()
+        end
+    end
+
+    return controller
 end
 
 function KryptUI.clear(parent, preserve)
@@ -432,21 +694,6 @@ function KryptUI.new(options)
     KryptUI.stroke(root, Theme.border, 0, 1)
     self.root = root
 
-    local shadow = KryptUI.create("ImageLabel", {
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundTransparency = 1,
-        Image = "rbxassetid://1316045217",
-        ImageColor3 = Color3.new(0, 0, 0),
-        ImageTransparency = 0.45,
-        Position = UDim2.fromScale(0.5, 0.5),
-        ScaleType = Enum.ScaleType.Slice,
-        Size = UDim2.new(1, 28, 1, 28),
-        SliceCenter = Rect.new(10, 10, 118, 118),
-        ZIndex = 0,
-        Parent = root,
-    })
-    shadow.Visible = false
-
     local header = KryptUI.create("Frame", {
         BackgroundColor3 = Theme.chrome,
         BorderSizePixel = 0,
@@ -463,11 +710,12 @@ function KryptUI.new(options)
         Parent = header,
     })
     KryptUI.corner(mark, 6)
-    KryptUI.label({
-        Font = Enum.Font.GothamBlack,
-        Size = UDim2.fromScale(1, 1),
-        Text = "K",
-        TextSize = 12,
+    KryptUI.icon({
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Color = Theme.text,
+        Icon = "bug",
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(13, 13),
         Parent = mark,
     })
 
@@ -507,20 +755,22 @@ function KryptUI.new(options)
     self.loadedBadge = loadedBadge
 
     local minimize = KryptUI.button({
+        Icon = "minus",
+        IconOnly = true,
         Parent = header,
         Position = UDim2.new(1, -72, 0.5, -12),
         Size = UDim2.fromOffset(26, 24),
-        Text = "—",
-        TextColor3 = Theme.textMuted,
+        IconColor = Theme.textMuted,
     })
     minimize.Position = UDim2.new(1, -72, 0.5, -12)
 
     local close = KryptUI.button({
+        Icon = "x",
+        IconOnly = true,
         Parent = header,
         Position = UDim2.new(1, -38, 0.5, -12),
         Size = UDim2.fromOffset(26, 24),
-        Text = "×",
-        TextColor3 = Theme.red,
+        IconColor = Theme.red,
     })
     close.Position = UDim2.new(1, -38, 0.5, -12)
 
@@ -669,21 +919,6 @@ function KryptUI.new(options)
             dragInput = nil
         end
     end))
-    table.insert(self.connections, UserInputService.InputChanged:Connect(function(input)
-        if dragInput and (input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch)
-        then
-            local delta = input.Position - dragStart
-            clampWindow(
-                root,
-                Vector2.new(startPosition.X.Offset + delta.X, startPosition.Y.Offset + delta.Y),
-                Vector2.new(root.Size.X.Offset, root.Size.Y.Offset),
-                self.minimum,
-                self.maximum
-            )
-        end
-    end))
-
     local directions = {
         N = { UDim2.new(0, 8, 0, 0), UDim2.new(1, -16, 0, 7), "N" },
         S = { UDim2.new(0, 8, 1, -7), UDim2.new(1, -16, 0, 7), "S" },
@@ -695,6 +930,11 @@ function KryptUI.new(options)
         SE = { UDim2.new(1, -12, 1, -12), UDim2.fromOffset(12, 12), "SE" },
     }
 
+    local resizeDirection
+    local resizeStart
+    local resizePosition
+    local resizeSize
+
     for _, definition in pairs(directions) do
         local handle = KryptUI.create("Frame", {
             Active = true,
@@ -705,10 +945,6 @@ function KryptUI.new(options)
             Parent = root,
         })
 
-        local resizing = false
-        local resizeStart
-        local resizePosition
-        local resizeSize
         local direction = definition[3]
 
         table.insert(self.connections, handle.InputBegan:Connect(function(input)
@@ -718,50 +954,61 @@ function KryptUI.new(options)
             if input.UserInputType == Enum.UserInputType.MouseButton1
                 or input.UserInputType == Enum.UserInputType.Touch
             then
-                resizing = true
+                resizeDirection = direction
                 resizeStart = input.Position
                 resizePosition = Vector2.new(root.Position.X.Offset, root.Position.Y.Offset)
                 resizeSize = Vector2.new(root.Size.X.Offset, root.Size.Y.Offset)
             end
         end))
+    end
 
-        table.insert(self.connections, UserInputService.InputChanged:Connect(function(input)
-            if not resizing or (input.UserInputType ~= Enum.UserInputType.MouseMovement
-                and input.UserInputType ~= Enum.UserInputType.Touch)
-            then
-                return
-            end
+    table.insert(self.connections, UserInputService.InputChanged:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement
+            and input.UserInputType ~= Enum.UserInputType.Touch
+        then
+            return
+        end
 
+        if resizeDirection then
             local delta = input.Position - resizeStart
             local positionNow = resizePosition
             local sizeNow = resizeSize
 
-            if direction:find("E", 1, true) then
+            if resizeDirection:find("E", 1, true) then
                 sizeNow = Vector2.new(resizeSize.X + delta.X, sizeNow.Y)
             end
-            if direction:find("S", 1, true) then
+            if resizeDirection:find("S", 1, true) then
                 sizeNow = Vector2.new(sizeNow.X, resizeSize.Y + delta.Y)
             end
-            if direction:find("W", 1, true) then
+            if resizeDirection:find("W", 1, true) then
                 positionNow = Vector2.new(resizePosition.X + delta.X, positionNow.Y)
                 sizeNow = Vector2.new(resizeSize.X - delta.X, sizeNow.Y)
             end
-            if direction:find("N", 1, true) then
+            if resizeDirection:find("N", 1, true) then
                 positionNow = Vector2.new(positionNow.X, resizePosition.Y + delta.Y)
                 sizeNow = Vector2.new(sizeNow.X, resizeSize.Y - delta.Y)
             end
 
             clampWindow(root, positionNow, sizeNow, self.minimum, self.maximum)
-        end))
+        elseif dragInput then
+            local delta = input.Position - dragStart
+            clampWindow(
+                root,
+                Vector2.new(startPosition.X.Offset + delta.X, startPosition.Y.Offset + delta.Y),
+                Vector2.new(root.Size.X.Offset, root.Size.Y.Offset),
+                self.minimum,
+                self.maximum
+            )
+        end
+    end))
 
-        table.insert(self.connections, UserInputService.InputEnded:Connect(function(input)
-            if resizing and (input.UserInputType == Enum.UserInputType.MouseButton1
-                or input.UserInputType == Enum.UserInputType.Touch)
-            then
-                resizing = false
-            end
-        end))
-    end
+    table.insert(self.connections, UserInputService.InputEnded:Connect(function(input)
+        if resizeDirection and (input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch)
+        then
+            resizeDirection = nil
+        end
+    end))
 
     table.insert(self.connections, UserInputService.InputBegan:Connect(function(input, processed)
         if not processed and input.KeyCode == Enum.KeyCode.RightShift then
@@ -815,13 +1062,12 @@ function Window:addTab(definition)
     })
     KryptUI.corner(indicator, 3)
 
-    local icon = KryptUI.label({
-        Font = Enum.Font.GothamBold,
-        Position = UDim2.fromOffset(4, 5),
-        Size = UDim2.new(1, -8, 0, 22),
-        Text = definition.icon or id:sub(1, 2):upper(),
-        TextColor3 = Theme.textMuted,
-        TextSize = 10,
+    local icon = KryptUI.icon({
+        AnchorPoint = Vector2.new(0.5, 0),
+        Color = Theme.textMuted,
+        Icon = definition.icon or "box",
+        Position = UDim2.new(0.5, 0, 0, 7),
+        Size = UDim2.fromOffset(19, 19),
         Parent = button,
     })
     local label = KryptUI.label({
@@ -893,11 +1139,24 @@ function Window:selectTab(id)
         tab.indicator.Visible = active
         tab.button.BackgroundTransparency = active and 0 or 1
         tab.button.BackgroundColor3 = active and Theme.surfaceRaised or Theme.transparent
-        tab.icon.TextColor3 = active and Theme.accent or Theme.textMuted
+        tab.icon.ImageColor3 = active and Theme.accent or Theme.textMuted
         tab.label.TextColor3 = active and Theme.text or Theme.textFaint
     end
 
     self.onTabSelected:fire(id)
+end
+
+local function destroyLoadingState(tab)
+    if not tab.loading then
+        return
+    end
+
+    if type(tab.loading) == "table" and type(tab.loading.destroy) == "function" then
+        tab.loading:destroy()
+    elseif typeof(tab.loading) == "Instance" then
+        tab.loading:Destroy()
+    end
+    tab.loading = nil
 end
 
 function Window:setTabLoading(id, loading)
@@ -908,19 +1167,15 @@ function Window:setTabLoading(id, loading)
 
     tab.loadDot.BackgroundColor3 = loading and Theme.yellow or Theme.textFaint
     if loading and not tab.loaded then
+        destroyLoadingState(tab)
         for _, child in ipairs(tab.page:GetChildren()) do
             child:Destroy()
         end
-        tab.loading = KryptUI.empty(
-            tab.page,
-            "Loading " .. id .. "…",
-            "Downloading and mounting the feature module."
-        )
-    elseif tab.loading then
-        local title = tab.loading:FindFirstChildWhichIsA("TextLabel")
-        if title then
-            title.Text = id .. " is not loaded"
-        end
+        tab.loading = KryptUI.loader({
+            Parent = tab.page,
+            Title = "Loading " .. id .. "…",
+            Detail = "Downloading and mounting the feature module.",
+        })
     end
 end
 
@@ -932,10 +1187,7 @@ function Window:setTabLoaded(id)
 
     tab.loaded = true
     tab.loadDot.BackgroundColor3 = Theme.green
-    if tab.loading then
-        tab.loading:Destroy()
-        tab.loading = nil
-    end
+    destroyLoadingState(tab)
 
     local loaded = 0
     local total = 0
@@ -955,6 +1207,7 @@ function Window:setTabError(id, message)
     end
 
     tab.loadDot.BackgroundColor3 = Theme.red
+    destroyLoadingState(tab)
     for _, child in ipairs(tab.page:GetChildren()) do
         child:Destroy()
     end

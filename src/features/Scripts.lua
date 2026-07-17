@@ -24,8 +24,14 @@ function Scripts.mount(ctx)
         indexing = false,
         indexToken = 0,
         sourceCache = setmetatable({}, { __mode = "k" }),
+        pathCache = setmetatable({}, { __mode = "k" }),
     }
     local rowConnections = {}
+    local rowByInstance = setmetatable({}, { __mode = "k" })
+    local searchToken = 0
+    local MAX_VISIBLE_ROWS = 160
+    local indexLoader
+    local sourceLoader
 
     local function clearRowConnections()
         for _, connection in ipairs(rowConnections) do
@@ -36,7 +42,17 @@ function Scripts.mount(ctx)
         table.clear(rowConnections)
     end
 
-    ctx:cleanup(clearRowConnections)
+    ctx:cleanup(function()
+        clearRowConnections()
+        if indexLoader then
+            indexLoader:destroy()
+            indexLoader = nil
+        end
+        if sourceLoader then
+            sourceLoader:destroy()
+            sourceLoader = nil
+        end
+    end)
 
     local toolbar = UI.toolbar(page)
     local search = UI.input({
@@ -44,14 +60,30 @@ function Scripts.mount(ctx)
         PlaceholderText = "Search scripts and paths…",
         Size = UDim2.fromOffset(250, 30),
     })
-    local refreshButton = UI.button({ Parent = toolbar, Text = "Re-index", Width = 76 })
-    local useSelectionButton = UI.button({ Parent = toolbar, Text = "Use selection", Width = 96 })
-    local copyButton = UI.button({ Parent = toolbar, Text = "Copy source", Width = 88 })
+    local refreshButton = UI.button({
+        Icon = "refresh-cw",
+        Parent = toolbar,
+        Text = "Re-index",
+        Width = 88,
+    })
+    local useSelectionButton = UI.button({
+        Icon = "locate-fixed",
+        Parent = toolbar,
+        Text = "Use selection",
+        Width = 108,
+    })
+    local copyButton = UI.button({
+        Icon = "copy",
+        Parent = toolbar,
+        Text = "Copy source",
+        Width = 100,
+    })
     local saveButton = UI.button({
+        Icon = "file-output",
         Parent = toolbar,
         Text = "Save source",
         TextColor3 = Theme.cyan,
-        Width = 86,
+        Width = 98,
     })
 
     local body = UI.create("Frame", {
@@ -187,6 +219,24 @@ function Scripts.mount(ctx)
     end
 
     local renderIndex
+    local function pathFor(instance)
+        local cached = state.pathCache[instance]
+        if cached then
+            return cached
+        end
+        local path = instance:GetFullName()
+        state.pathCache[instance] = path
+        return path
+    end
+
+    local function updateSelectionRows()
+        for instance, row in pairs(rowByInstance) do
+            if row and row.Parent then
+                row.BackgroundColor3 = instance == state.selected and Theme.accentSoft or Theme.surface
+            end
+        end
+    end
+
     local function selectScript(instance)
         if typeof(instance) ~= "Instance" or not isScript(instance) then
             ctx:toast("The current selection is not a script", Theme.yellow)
@@ -194,21 +244,45 @@ function Scripts.mount(ctx)
         end
 
         state.selected = instance
+        updateSelectionRows()
         selectedName.Text = instance.Name
         selectedPath.Text = ctx:path(instance)
         sourceStatus.Text = "Reading source…"
         sourceStatus.TextColor3 = Theme.yellow
         ctx:setSelection(instance)
+        if sourceLoader then
+            sourceLoader:destroy()
+        end
+        local loader = UI.loader({
+            BackgroundColor3 = Theme.input,
+            BackgroundTransparency = 0.04,
+            Detail = instance.Name,
+            Parent = sourcePanel,
+            Position = UDim2.fromOffset(8, 74),
+            Size = UDim2.new(1, -16, 1, -82),
+            Title = "Reading source…",
+            ZIndex = 10,
+        })
+        sourceLoader = loader
 
         task.spawn(function()
-            local ok, result, mode = sourceFor(instance)
+            local completed, ok, result, mode = pcall(sourceFor, instance)
             if state.selected ~= instance or not ctx.app.alive then
                 return
+            end
+            loader:destroy()
+            if sourceLoader == loader then
+                sourceLoader = nil
+            end
+            if not completed then
+                result = "-- Source read failed:\n-- " .. tostring(ok)
+                ok = false
+                mode = "failed"
             end
             source.Text = result
             sourceStatus.Text = ok and ("Source ready · " .. mode) or "Source unavailable"
             sourceStatus.TextColor3 = ok and Theme.green or Theme.yellow
-            renderIndex()
+            updateSelectionRows()
         end)
     end
 
@@ -217,20 +291,27 @@ function Scripts.mount(ctx)
             return
         end
         clearRowConnections()
-        UI.clear(list)
+        local preserve = {}
+        if indexLoader and indexLoader.frame.Parent == list then
+            preserve[indexLoader.frame] = true
+        end
+        UI.clear(list, preserve)
+        rowByInstance = setmetatable({}, { __mode = "k" })
         local query = search.Text:lower()
         local filtered = {}
         for _, instance in ipairs(state.index) do
             if query == ""
                 or instance.Name:lower():find(query, 1, true)
-                or instance:GetFullName():lower():find(query, 1, true)
+                or pathFor(instance):lower():find(query, 1, true)
                 or instance.ClassName:lower():find(query, 1, true)
             then
                 table.insert(filtered, instance)
             end
         end
 
-        for index, instance in ipairs(filtered) do
+        local visibleCount = math.min(#filtered, MAX_VISIBLE_ROWS)
+        for index = 1, visibleCount do
+            local instance = filtered[index]
             local active = instance == state.selected
             local row = UI.create("TextButton", {
                 AutoButtonColor = false,
@@ -241,6 +322,7 @@ function Scripts.mount(ctx)
                 Text = "",
                 Parent = list,
             })
+            rowByInstance[instance] = row
             UI.corner(row, 6)
             UI.stroke(row, active and Theme.accent or Theme.borderSoft, active and 0.35 or 0.5)
             local badgeColor = instance:IsA("ModuleScript") and Theme.yellow
@@ -273,7 +355,7 @@ function Scripts.mount(ctx)
                 Font = Enum.Font.Code,
                 Position = UDim2.fromOffset(42, 22),
                 Size = UDim2.new(1, -48, 0, 15),
-                Text = instance:GetFullName(),
+                Text = pathFor(instance),
                 TextColor3 = Theme.textFaint,
                 TextSize = 8,
                 TextTruncate = Enum.TextTruncate.AtEnd,
@@ -285,7 +367,11 @@ function Scripts.mount(ctx)
             end))
         end
 
-        countLabel.Text = ("SCRIPT INDEX · %d / %d"):format(#filtered, #state.index)
+        countLabel.Text = ("SCRIPT INDEX · %d shown / %d matches / %d total"):format(
+            visibleCount,
+            #filtered,
+            #state.index
+        )
     end
 
     local function rebuildIndex()
@@ -297,55 +383,99 @@ function Scripts.mount(ctx)
         state.indexToken = state.indexToken + 1
         local token = state.indexToken
         state.index = {}
+        state.pathCache = setmetatable({}, { __mode = "k" })
         indexStatus.Text = "Scanning DataModel asynchronously…"
         indexStatus.TextColor3 = Theme.yellow
         renderIndex()
+        if indexLoader then
+            indexLoader:destroy()
+        end
+        local loader = UI.loader({
+            Detail = "Walking the DataModel in bounded batches…",
+            LayoutOrder = -1,
+            Parent = list,
+            Size = UDim2.new(1, 0, 0, 136),
+            Title = "Indexing scripts",
+        })
+        indexLoader = loader
 
         task.spawn(function()
             local queue = { game }
             local head = 1
             local visited = 0
-            while head <= #queue and visited < 30000 and #state.index < 700 do
-                if token ~= state.indexToken or not ctx.app.alive then
-                    return
-                end
+            local completed, failure = pcall(function()
+                while head <= #queue and visited < 30000 and #state.index < 700 do
+                    if token ~= state.indexToken or not ctx.app.alive then
+                        return
+                    end
 
-                local instance = queue[head]
-                head = head + 1
-                visited = visited + 1
-                if instance ~= game and isScript(instance) then
-                    table.insert(state.index, instance)
-                end
+                    local instance = queue[head]
+                    head = head + 1
+                    visited = visited + 1
+                    if instance ~= game and isScript(instance) then
+                        table.insert(state.index, instance)
+                    end
 
-                local ok, children = pcall(instance.GetChildren, instance)
-                if ok then
-                    for _, child in ipairs(children) do
-                        if #queue < 35000 then
-                            table.insert(queue, child)
+                    local ok, children = pcall(instance.GetChildren, instance)
+                    if ok then
+                        for _, child in ipairs(children) do
+                            if #queue < 35000 then
+                                table.insert(queue, child)
+                            end
                         end
+                    end
+
+                    if visited % 350 == 0 then
+                        indexStatus.Text = ("Scanning… %d visited · %d scripts"):format(
+                            visited,
+                            #state.index
+                        )
+                        if loader == indexLoader then
+                            loader:setDetail(
+                                ("%d instances visited · %d scripts found"):format(
+                                    visited,
+                                    #state.index
+                                )
+                            )
+                        end
+                        task.wait()
                     end
                 end
 
-                if visited % 350 == 0 then
-                    indexStatus.Text = ("Scanning… %d visited · %d scripts"):format(
-                        visited,
-                        #state.index
-                    )
-                    task.wait()
-                end
-            end
-
-            table.sort(state.index, function(left, right)
-                return left:GetFullName():lower() < right:GetFullName():lower()
+                table.sort(state.index, function(left, right)
+                    return left:GetFullName():lower() < right:GetFullName():lower()
+                end)
             end)
+
+            if token ~= state.indexToken or not ctx.app.alive then
+                return
+            end
             state.indexing = false
+            loader:destroy()
+            if indexLoader == loader then
+                indexLoader = nil
+            end
+            if not completed then
+                indexStatus.Text = "Indexing failed"
+                indexStatus.TextColor3 = Theme.red
+                ctx:toast("Script indexing failed: " .. tostring(failure), Theme.red, 4)
+                return
+            end
             indexStatus.Text = ("%d instances visited · index capped at 700 scripts"):format(visited)
             indexStatus.TextColor3 = Theme.green
             renderIndex()
         end)
     end
 
-    ctx:connect(search:GetPropertyChangedSignal("Text"), renderIndex)
+    ctx:connect(search:GetPropertyChangedSignal("Text"), function()
+        searchToken = searchToken + 1
+        local token = searchToken
+        task.delay(0.16, function()
+            if token == searchToken and ctx:isActive() then
+                renderIndex()
+            end
+        end)
+    end)
     ctx:connect(refreshButton.MouseButton1Click, rebuildIndex)
     ctx:connect(useSelectionButton.MouseButton1Click, function()
         selectScript(ctx:getSelection())

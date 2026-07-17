@@ -16,6 +16,9 @@ const expectedModules = [
   "src/features/Console.lua",
   "src/features/Diagnostics.lua",
 ];
+const expectedAssets = [
+  "assets/lucide-kryptdbg.png",
+];
 
 let failed = false;
 for (const relativePath of expectedModules) {
@@ -40,6 +43,75 @@ for (const relativePath of expectedModules) {
   }
 }
 
+for (const relativePath of expectedAssets) {
+  const absolutePath = path.join(root, relativePath);
+  if (!fs.existsSync(absolutePath)) {
+    console.error(`missing: ${relativePath}`);
+    failed = true;
+    continue;
+  }
+
+  const contents = fs.readFileSync(absolutePath);
+  const pngSignature = "89504e470d0a1a0a";
+  const width = contents.length >= 24 ? contents.readUInt32BE(16) : 0;
+  const height = contents.length >= 24 ? contents.readUInt32BE(20) : 0;
+  if (contents.length === 0
+    || contents.subarray(0, 8).toString("hex") !== pngSignature
+    || width !== 384
+    || height !== 144
+  ) {
+    console.error(`asset: invalid PNG ${relativePath}`);
+    failed = true;
+  } else {
+    console.log(`asset: pass ${relativePath}`);
+  }
+}
+
+const uiSource = fs.readFileSync(path.join(root, "src/KryptUI.lua"), "utf8");
+const iconTable = uiSource.match(/local LucideAssets = \{([\s\S]*?)\n\}/)?.[1] ?? "";
+const availableIcons = new Set(
+  [...iconTable.matchAll(/\["([^"]+)"\]\s*=/g)].map((match) => match[1]),
+);
+const requiredIcons = new Set(["ban", "circle-check", "pause", "play", "unplug"]);
+for (const relativePath of expectedModules.slice(1)) {
+  const source = fs.readFileSync(path.join(root, relativePath), "utf8");
+  for (const match of source.matchAll(/\b(?:Icon|icon)\s*=\s*"([^"]+)"/g)) {
+    requiredIcons.add(match[1]);
+  }
+}
+for (const icon of requiredIcons) {
+  if (!availableIcons.has(icon)) {
+    console.error(`icon: missing Lucide mapping ${icon}`);
+    failed = true;
+  }
+}
+
+const consoleSource = fs.readFileSync(path.join(root, "src/features/Console.lua"), "utf8");
+const remotesSource = fs.readFileSync(path.join(root, "src/features/Remotes.lua"), "utf8");
+const explorerSource = fs.readFileSync(path.join(root, "src/features/Explorer.lua"), "utf8");
+if (consoleSource.includes("UI.clear(output)") || remotesSource.includes("UI.clear(list)")) {
+  console.error("performance: pooled high-frequency lists must not be fully rebuilt");
+  failed = true;
+}
+if (remotesSource.includes("task.defer(capture")
+  || explorerSource.includes("game.DescendantAdded")
+  || explorerSource.includes("game.DescendantRemoving")
+) {
+  console.error("performance: high-frequency task or hierarchy listener regression");
+  failed = true;
+}
+if ((uiSource.match(/UserInputService\.InputChanged/g) ?? []).length !== 1) {
+  console.error("performance: window should have one global input-change handler");
+  failed = true;
+}
+if (!uiSource.includes("function KryptUI.loader")
+  || !uiSource.includes("ActiveLoaders")
+  || !uiSource.includes("task.wait(0.08)")
+) {
+  console.error("loader: shared non-blocking loader contract is incomplete");
+  failed = true;
+}
+
 const manifest = fs.readFileSync(path.join(root, "src/Manifest.lua"), "utf8");
 for (const relativePath of expectedModules.slice(2)) {
   if (!manifest.includes(relativePath) && relativePath !== "src/Runtime.lua") {
@@ -49,7 +121,12 @@ for (const relativePath of expectedModules.slice(2)) {
 }
 
 const bootstrap = fs.readFileSync(path.join(root, "init.lua"), "utf8");
-if (!bootstrap.includes("KryptDbgBaseUrl") || !bootstrap.includes("manifest.core")) {
+if (!bootstrap.includes("KryptDbgBaseUrl")
+  || !bootstrap.includes("manifest.core")
+  || !bootstrap.includes("fetch = fetch")
+  || !bootstrap.includes("createBootstrapLoader")
+  || !bootstrap.includes("bootstrapLoader:fail")
+) {
   console.error("bootstrap: lazy loader contract is incomplete");
   failed = true;
 }
