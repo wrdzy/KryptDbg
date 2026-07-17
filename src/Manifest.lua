@@ -1,6 +1,6 @@
 return {
     name = "KryptDbg",
-    version = "1.2.0",
+    version = "1.3.0",
     ui = "src/KryptUI.lua",
     core = "src/Runtime.lua",
     defaultFeature = "Explorer",
@@ -44,6 +44,14 @@ return {
             description = "Runtime health",
             path = "src/features/Diagnostics.lua",
             shortcut = Enum.KeyCode.Five,
+        },
+        {
+            id = "Settings",
+            icon = "cog",
+            title = "Settings",
+            description = "Preferences and AI dump",
+            path = "src/features/Settings.lua",
+            shortcut = Enum.KeyCode.Six,
         },
     },
 }

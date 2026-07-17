@@ -53,7 +53,9 @@ local LucideAssets = {
     ["circle-check"] = { 16898612819, 869, 955, 192, 0 },
     ["chevron-down"] = { 16898612819, 196, 918 },
     ["chevron-right"] = { 16898612819, 869, 759 },
+    ["cog"] = { 16898613044, 918, 563 },
     ["copy"] = { 16898613044, 918, 612, 240, 0 },
+    ["database-backup"] = { 16898613044, 820, 759 },
     ["file-code-2"] = { 16898613353, 918, 0, 288, 0 },
     ["file-output"] = { 16898613353, 661, 771, 336, 0 },
     ["folder-tree"] = { 16898613353, 967, 404, 0, 48 },
@@ -115,7 +117,7 @@ function KryptUI.configureAssets(options)
         return false
     end
 
-    local filename = "KryptDbg_lucide_1_2_0.png"
+    local filename = "KryptDbg_lucide_1_3_0.png"
     local fetched, contents = pcall(config.fetch, "assets/lucide-kryptdbg.png")
     if not fetched or type(contents) ~= "string" or contents == "" then
         return false
@@ -297,6 +299,7 @@ end
 
 function KryptUI.button(properties)
     local options = properties or {}
+    local hasLabeledIcon = options.Icon ~= nil and options.IconOnly ~= true
     local button = textObject("TextButton", {
         AutoButtonColor = false,
         BackgroundColor3 = options.BackgroundColor3 or Theme.surfaceRaised,
@@ -307,6 +310,7 @@ function KryptUI.button(properties)
         Size = options.Size or UDim2.fromOffset(options.Width or 92, options.Height or 30),
         Text = options.IconOnly and "" or options.Text or "Button",
         TextColor3 = options.TextColor3 or Theme.text,
+        TextTransparency = hasLabeledIcon and 1 or 0,
         TextSize = options.TextSize or 11,
         LayoutOrder = options.LayoutOrder or 0,
         Parent = options.Parent,
@@ -330,15 +334,62 @@ function KryptUI.button(properties)
         })
     end
 
+    if hasLabeledIcon then
+        local iconSize = options.IconSize or 16
+        local iconOffset = options.IconOffset or 8
+        local textLabel = textObject("TextLabel", {
+            BackgroundTransparency = 1,
+            Font = options.Font or Enum.Font.GothamMedium,
+            Position = UDim2.fromOffset(iconOffset + iconSize + 6, 0),
+            Size = UDim2.new(1, -(iconOffset + iconSize + 12), 1, 0),
+            Text = button.Text,
+            TextColor3 = button.TextColor3,
+            TextSize = options.TextSize or 11,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = button.ZIndex + 1,
+            Parent = button,
+        })
+        button:GetPropertyChangedSignal("Text"):Connect(function()
+            if textLabel.Parent then
+                textLabel.Text = button.Text
+            end
+        end)
+        button:GetPropertyChangedSignal("TextColor3"):Connect(function()
+            if textLabel.Parent then
+                textLabel.TextColor3 = button.TextColor3
+            end
+        end)
+    end
+
     local base = button.BackgroundColor3
+    local hovering = false
+    local applyingHover = false
+    button:GetPropertyChangedSignal("BackgroundColor3"):Connect(function()
+        if applyingHover then
+            return
+        end
+        base = button.BackgroundColor3
+        if hovering then
+            applyingHover = true
+            button.BackgroundColor3 = options.HoverColor or Theme.surfaceHover
+            applyingHover = false
+        end
+    end)
     button.MouseEnter:Connect(function()
         if button.Parent then
+            hovering = true
+            applyingHover = true
             button.BackgroundColor3 = options.HoverColor or Theme.surfaceHover
+            applyingHover = false
         end
     end)
     button.MouseLeave:Connect(function()
         if button.Parent then
+            hovering = false
+            applyingHover = true
             button.BackgroundColor3 = base
+            applyingHover = false
         end
     end)
 
@@ -626,13 +677,26 @@ end
 
 local function clampWindow(frame, position, size, minimum, maximum)
     local viewport = viewportSize()
-    local width = math.clamp(size.X, minimum.X, math.min(maximum.X, viewport.X - 24))
-    local height = math.clamp(size.Y, minimum.Y, math.min(maximum.Y, viewport.Y - 24))
+    local availableWidth = math.max(300, viewport.X - 24)
+    local availableHeight = math.max(220, viewport.Y - 24)
+    local minimumWidth = math.min(minimum.X, availableWidth)
+    local minimumHeight = math.min(minimum.Y, availableHeight)
+    local width = math.clamp(size.X, minimumWidth, math.min(maximum.X, availableWidth))
+    local height = math.clamp(size.Y, minimumHeight, math.min(maximum.Y, availableHeight))
     local x = math.clamp(position.X, 12, math.max(12, viewport.X - width - 12))
     local y = math.clamp(position.Y, 12, math.max(12, viewport.Y - height - 12))
 
     frame.Position = UDim2.fromOffset(x, y)
     frame.Size = UDim2.fromOffset(width, height)
+end
+
+local function clampPosition(frame, position, size)
+    local viewport = viewportSize()
+    local width = math.min(size.X, math.max(1, viewport.X - 24))
+    local height = math.min(size.Y, math.max(1, viewport.Y - 24))
+    local x = math.clamp(position.X, 12, math.max(12, viewport.X - width - 12))
+    local y = math.clamp(position.Y, 12, math.max(12, viewport.Y - height - 12))
+    frame.Position = UDim2.fromOffset(x, y)
 end
 
 function KryptUI.new(options)
@@ -701,6 +765,7 @@ function KryptUI.new(options)
     KryptUI.corner(root, 10)
     KryptUI.stroke(root, Theme.border, 0, 1)
     self.root = root
+    clampWindow(root, position, initial, self.minimum, self.maximum)
 
     local header = KryptUI.create("Frame", {
         BackgroundColor3 = Theme.chrome,
@@ -883,23 +948,34 @@ function KryptUI.new(options)
 
     local minimized = false
     local savedSize = root.Size
-    local savedPosition = root.Position
 
     local function setMinimized(value)
+        if minimized == value then
+            return
+        end
         minimized = value
         if minimized then
             savedSize = root.Size
-            savedPosition = root.Position
             rail.Visible = false
             content.Visible = false
             statusBar.Visible = false
-            root.Size = UDim2.fromOffset(330, Metrics.header)
+            self.subtitle.Visible = false
+            loadedBadge.Visible = false
+            root.Size = UDim2.fromOffset(300, Metrics.header)
+            clampPosition(
+                root,
+                Vector2.new(root.Position.X.Offset, root.Position.Y.Offset),
+                Vector2.new(root.Size.X.Offset, root.Size.Y.Offset)
+            )
         else
+            local currentPosition = root.Position
             rail.Visible = true
             content.Visible = true
             statusBar.Visible = true
+            self.subtitle.Visible = true
+            loadedBadge.Visible = true
             root.Size = savedSize
-            root.Position = savedPosition
+            root.Position = currentPosition
             clampWindow(
                 root,
                 Vector2.new(root.Position.X.Offset, root.Position.Y.Offset),
@@ -1014,13 +1090,16 @@ function KryptUI.new(options)
             clampWindow(root, positionNow, sizeNow, self.minimum, self.maximum)
         elseif dragInput then
             local delta = input.Position - dragStart
-            clampWindow(
-                root,
-                Vector2.new(startPosition.X.Offset + delta.X, startPosition.Y.Offset + delta.Y),
-                Vector2.new(root.Size.X.Offset, root.Size.Y.Offset),
-                self.minimum,
-                self.maximum
+            local nextPosition = Vector2.new(
+                startPosition.X.Offset + delta.X,
+                startPosition.Y.Offset + delta.Y
             )
+            local currentSize = Vector2.new(root.Size.X.Offset, root.Size.Y.Offset)
+            if minimized then
+                clampPosition(root, nextPosition, currentSize)
+            else
+                clampWindow(root, nextPosition, currentSize, self.minimum, self.maximum)
+            end
         end
     end))
 

@@ -16,8 +16,8 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/wrdzy/KryptDbg/main/i
 
 `init.lua` downloads only the manifest, `KryptUI`, and the runtime at startup.
 Explorer is then mounted as the default workspace. Remotes, Scripts, Console,
-and Diagnostics are fetched on demand and stay mounted after loading, so their
-state and subscriptions continue to coexist.
+Diagnostics, and Settings are fetched on demand and stay mounted after loading,
+so their state and subscriptions continue to coexist.
 
 Set `getgenv().KryptDbgBaseUrl` before running the bootstrap to test a fork or a
 different branch.
@@ -30,13 +30,15 @@ init.lua
  ├─ src/KryptUI.lua
  └─ src/Runtime.lua
      ├─ shared selection + highlight
+     ├─ settings + executor workspace
      ├─ event bus + cleanup lifecycle
      └─ lazy feature loader
          ├─ Explorer.lua
          ├─ Remotes.lua
          ├─ Scripts.lua
          ├─ Console.lua
-         └─ Diagnostics.lua
+         ├─ Diagnostics.lua
+         └─ Settings.lua
 ```
 
 Feature modules depend on the runtime context instead of depending directly on
@@ -51,7 +53,8 @@ boundaries clear while allowing loaded tools to work together.
 - One professional IDE-style window and tab rail
 - Consistent colors, typography, spacing, panels, inputs, buttons, and lists
 - A dedicated drag region and eight edge/corner resize zones
-- Viewport clamping, minimum/maximum sizing, minimize, and RightShift visibility
+- Viewport clamping, minimum/maximum sizing, compact minimize, and
+  RightShift visibility
 - Status bar, module load indicators, toasts, empty states, and shared primitives
 - High-contrast Lucide icons loaded from the published Roblox atlases, including
   dedicated Explorer expand/collapse chevrons
@@ -72,12 +75,16 @@ KryptUI is custom code and does not embed those libraries.
 ### Explorer
 
 - Searchable, expandable DataModel hierarchy
-- DarkDex-style Roblox class icons with all root services and nil instances
-  collapsed into lightweight top-level rows on startup
+- DarkDex-style flat tree virtualization: only enough pooled GUI rows to cover
+  the visible viewport are rendered
+- Roblox's built-in class icon atlas with Lucide expand/collapse arrows
+- All root services and optional nil instances start collapsed
+- Debounced live hierarchy updates with no manual Refresh button
 - Shared selection and viewport highlighting
 - Armed world-object picker
-- Curated properties and attributes editor
-- Copyable instance paths, batched tree rendering, and bounded asynchronous search
+- Expanded properties and attributes editor with boolean toggles, enum cycling,
+  and typed value parsing
+- Copyable instance paths and bounded asynchronous search
 
 ### Remotes
 
@@ -107,9 +114,25 @@ KryptUI is custom code and does not embed those libraries.
 - Lazy-module status
 - Copyable report and capability-gated Save Instance
 
+### Settings and AI debug dump
+
+- Live Explorer, nil-instance, property, attribute, and script-source controls
+- Creates `KryptDbg/DUMP` in the executor workspace at startup
+- Produces `summary.md`, `game.json`, `instances.jsonl`,
+  `scripts/index.jsonl`, and available bounded `scripts/*.lua` files
+- Uses Potassium's `getproperties` when present, with curated class-aware
+  property discovery as a compatibility fallback
+- Streams large JSONL output with `appendfile` when supported
+- Shows live loader progress and records every safety limit or truncation
+
+The dump is designed as a searchable client-side snapshot for debugging an
+experience you own or are authorized to test. Start an AI review with
+`summary.md` and `game.json`, then provide only the relevant JSONL records and
+script files.
+
 ## Shortcuts
 
-- `Ctrl+1` through `Ctrl+5` switch workspaces
+- `Ctrl+1` through `Ctrl+6` switch workspaces
 - `RightShift` hides or restores the window
 
 ## Development
@@ -125,8 +148,8 @@ dependency exists.
 ## Limitations
 
 - Features relying on executor-specific APIs remain disabled when unavailable.
-- Large hierarchies, script indexes, logs, and searches are capped and rendered
-  in yielding batches to protect frame rate and memory.
+- Large hierarchies, script indexes, logs, searches, and dumps are capped and
+  processed in yielding batches to protect frame rate and memory.
 - High-frequency Console and Remotes updates are batched to avoid rebuilding
   retained UI lists for every event.
 - Long-running scans yield between bounded batches and expose live progress

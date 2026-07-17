@@ -15,6 +15,7 @@ const expectedModules = [
   "src/features/Scripts.lua",
   "src/features/Console.lua",
   "src/features/Diagnostics.lua",
+  "src/features/Settings.lua",
 ];
 const expectedAssets = [
   "assets/lucide-kryptdbg.png",
@@ -101,19 +102,22 @@ if (consoleSource.includes("UI.clear(output)") || remotesSource.includes("UI.cle
   console.error("performance: pooled high-frequency lists must not be fully rebuilt");
   failed = true;
 }
-if (remotesSource.includes("task.defer(capture")
-  || explorerSource.includes("game.DescendantAdded")
-  || explorerSource.includes("game.DescendantRemoving")
-) {
-  console.error("performance: high-frequency task or hierarchy listener regression");
+if (remotesSource.includes("task.defer(capture")) {
+  console.error("performance: high-frequency remote capture task regression");
   failed = true;
 }
 if (explorerSource.includes("expanded[root] = true")
-  || !explorerSource.includes("RENDER_BATCH")
+  || explorerSource.includes('Text = "Refresh"')
+  || !explorerSource.includes("rowPool")
+  || !explorerSource.includes("CanvasPosition")
+  || !explorerSource.includes("AUTO_UPDATE_DELAY")
+  || explorerSource.includes("task.delay(AUTO_UPDATE_DELAY")
+  || !explorerSource.includes("game.DescendantAdded")
+  || !explorerSource.includes("game.DescendantRemoving")
   || !explorerSource.includes("CLASS_ICON_ASSET")
   || !explorerSource.includes("Loading Explorer")
 ) {
-  console.error("explorer: collapsed, icon-backed, batched rendering contract is incomplete");
+  console.error("explorer: collapsed, live, icon-backed virtual tree contract is incomplete");
   failed = true;
 }
 if ((uiSource.match(/UserInputService\.InputChanged/g) ?? []).length !== 1) {
@@ -137,12 +141,30 @@ for (const relativePath of expectedModules.slice(2)) {
 }
 
 const runtimeSource = fs.readFileSync(path.join(root, "src/Runtime.lua"), "utf8");
+const settingsSource = fs.readFileSync(path.join(root, "src/features/Settings.lua"), "utf8");
 if (!runtimeSource.includes("identifyexecutor")
   || !runtimeSource.includes("getexecutorname")
   || !runtimeSource.includes("Watermark")
   || !uiSource.includes('pcall(os.date, "%H:%M:%S")')
 ) {
   console.error("watermark: executor identity or live clock contract is incomplete");
+  failed = true;
+}
+if (!runtimeSource.includes('dump = "KryptDbg/DUMP"')
+  || !settingsSource.includes("instances.jsonl")
+  || !settingsSource.includes("scripts/index.jsonl")
+  || !settingsSource.includes("MAX_INSTANCES_WITH_APPEND")
+  || !settingsSource.includes("dumpScriptSources")
+  || !settingsSource.includes('executorFunction("getproperties")')
+) {
+  console.error("settings: bounded AI debug dump contract is incomplete");
+  failed = true;
+}
+if (!uiSource.includes("clampPosition")
+  || !uiSource.includes("if minimized then")
+  || !uiSource.includes("self.subtitle.Visible = false")
+) {
+  console.error("window: compact drag and minimize contract is incomplete");
   failed = true;
 }
 

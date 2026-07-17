@@ -155,6 +155,50 @@ local function executorIdentity()
     return "Unknown executor"
 end
 
+local function executorFunction(name)
+    local environment = (getgenv and getgenv()) or _G
+    local value = rawget(environment, name)
+    if value == nil and type(_G) == "table" then
+        value = rawget(_G, name)
+    end
+    return type(value) == "function" and value or nil
+end
+
+local function prepareWorkspace()
+    local makeFolder = executorFunction("makefolder")
+    local isFolder = executorFunction("isfolder")
+    local writeFile = executorFunction("writefile")
+    local workspaceInfo = {
+        root = "KryptDbg",
+        dump = "KryptDbg/DUMP",
+        available = type(makeFolder) == "function" and type(writeFile) == "function",
+        error = nil,
+    }
+
+    local function ensure(path)
+        if type(isFolder) == "function" then
+            local checked, exists = pcall(isFolder, path)
+            if checked and exists then
+                return true
+            end
+        end
+        if type(makeFolder) ~= "function" then
+            return false, "makefolder is unavailable"
+        end
+        local ok, message = pcall(makeFolder, path)
+        if not ok and tostring(message):lower():find("exist", 1, true) then
+            return true
+        end
+        return ok, ok and nil or tostring(message)
+    end
+
+    local rootOk, rootError = ensure(workspaceInfo.root)
+    local dumpOk, dumpError = rootOk and ensure(workspaceInfo.dump)
+    workspaceInfo.available = workspaceInfo.available and rootOk and dumpOk
+    workspaceInfo.error = not rootOk and rootError or not dumpOk and dumpError or nil
+    return workspaceInfo
+end
+
 function Runtime.start(config)
     assert(type(config) == "table", "Runtime.start requires a config table")
     assert(type(config.execute) == "function", "Runtime.start requires a module executor")
@@ -177,7 +221,15 @@ function Runtime.start(config)
         selectedInstance = nil,
         manifest = manifest,
         baseUrl = config.baseUrl,
+        settings = {
+            explorerAutoUpdate = true,
+            includeNilInstances = true,
+            dumpAttributes = true,
+            dumpProperties = true,
+            dumpScriptSources = true,
+        },
     }
+    app.workspace = prepareWorkspace()
 
     app.services = {
         Players = game:GetService("Players"),
@@ -195,6 +247,7 @@ function Runtime.start(config)
         selectionChanged = UI.Signal(),
         activeFeatureChanged = UI.Signal(),
         moduleLoaded = UI.Signal(),
+        settingsChanged = UI.Signal(),
         shuttingDown = UI.Signal(),
     }
 
@@ -267,6 +320,14 @@ function Runtime.start(config)
         return result
     end
 
+    function app:setSetting(key, value)
+        if self.settings[key] == value then
+            return
+        end
+        self.settings[key] = value
+        self.events.settingsChanged:fire(key, value)
+    end
+
     local function makeContext(feature)
         local context = {
             id = feature.id,
@@ -276,6 +337,8 @@ function Runtime.start(config)
             ui = UI,
             theme = Theme,
             services = app.services,
+            settings = app.settings,
+            workspace = app.workspace,
             connections = {},
             cleanups = {},
         }
@@ -338,6 +401,10 @@ function Runtime.start(config)
 
         function context:path(instance)
             return instancePath(instance)
+        end
+
+        function context:setSetting(key, value)
+            app:setSetting(key, value)
         end
 
         function context:serialize(value)
