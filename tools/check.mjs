@@ -72,7 +72,15 @@ const iconTable = uiSource.match(/local LucideAssets = \{([\s\S]*?)\n\}/)?.[1] ?
 const availableIcons = new Set(
   [...iconTable.matchAll(/\["([^"]+)"\]\s*=/g)].map((match) => match[1]),
 );
-const requiredIcons = new Set(["ban", "circle-check", "pause", "play", "unplug"]);
+const requiredIcons = new Set([
+  "ban",
+  "chevron-down",
+  "chevron-right",
+  "circle-check",
+  "pause",
+  "play",
+  "unplug",
+]);
 for (const relativePath of expectedModules.slice(1)) {
   const source = fs.readFileSync(path.join(root, relativePath), "utf8");
   for (const match of source.matchAll(/\b(?:Icon|icon)\s*=\s*"([^"]+)"/g)) {
@@ -100,6 +108,14 @@ if (remotesSource.includes("task.defer(capture")
   console.error("performance: high-frequency task or hierarchy listener regression");
   failed = true;
 }
+if (explorerSource.includes("expanded[root] = true")
+  || !explorerSource.includes("RENDER_BATCH")
+  || !explorerSource.includes("CLASS_ICON_ASSET")
+  || !explorerSource.includes("Loading Explorer")
+) {
+  console.error("explorer: collapsed, icon-backed, batched rendering contract is incomplete");
+  failed = true;
+}
 if ((uiSource.match(/UserInputService\.InputChanged/g) ?? []).length !== 1) {
   console.error("performance: window should have one global input-change handler");
   failed = true;
@@ -118,6 +134,16 @@ for (const relativePath of expectedModules.slice(2)) {
     console.error(`manifest: missing dependency ${relativePath}`);
     failed = true;
   }
+}
+
+const runtimeSource = fs.readFileSync(path.join(root, "src/Runtime.lua"), "utf8");
+if (!runtimeSource.includes("identifyexecutor")
+  || !runtimeSource.includes("getexecutorname")
+  || !runtimeSource.includes("Watermark")
+  || !uiSource.includes('pcall(os.date, "%H:%M:%S")')
+) {
+  console.error("watermark: executor identity or live clock contract is incomplete");
+  failed = true;
 }
 
 const bootstrap = fs.readFileSync(path.join(root, "init.lua"), "utf8");

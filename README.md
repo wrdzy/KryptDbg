@@ -53,10 +53,12 @@ boundaries clear while allowing loaded tools to work together.
 - A dedicated drag region and eight edge/corner resize zones
 - Viewport clamping, minimum/maximum sizing, minimize, and RightShift visibility
 - Status bar, module load indicators, toasts, empty states, and shared primitives
-- Lucide icons delivered through one bundled 5 KB sprite sheet, with Roblox
-  atlas IDs as a compatibility fallback
+- High-contrast Lucide icons loaded from the published Roblox atlases, including
+  dedicated Explorer expand/collapse chevrons
 - MageCDN Circle Fade loaders for startup, module downloads, bounded scans,
   source reads, commands, replay, and Save Instance
+- A live `time | KryptDbg | executor` watermark using guarded UNC-compatible
+  executor identification
 - Mouse and touch input support
 
 The component approach was informed by
@@ -70,11 +72,12 @@ KryptUI is custom code and does not embed those libraries.
 ### Explorer
 
 - Searchable, expandable DataModel hierarchy
-- Optional nil-instance roots when supported
+- DarkDex-style Roblox class icons with all root services and nil instances
+  collapsed into lightweight top-level rows on startup
 - Shared selection and viewport highlighting
 - Armed world-object picker
 - Curated properties and attributes editor
-- Copyable instance paths and bounded asynchronous search
+- Copyable instance paths, batched tree rendering, and bounded asynchronous search
 
 ### Remotes
 
@@ -122,8 +125,8 @@ dependency exists.
 ## Limitations
 
 - Features relying on executor-specific APIs remain disabled when unavailable.
-- Large hierarchies, script indexes, logs, and searches are capped to protect
-  frame rate and memory.
+- Large hierarchies, script indexes, logs, and searches are capped and rendered
+  in yielding batches to protect frame rate and memory.
 - High-frequency Console and Remotes updates are batched to avoid rebuilding
   retained UI lists for every event.
 - Long-running scans yield between bounded batches and expose live progress

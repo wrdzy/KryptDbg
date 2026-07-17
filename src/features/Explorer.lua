@@ -13,6 +13,86 @@ local ROOT_SERVICES = {
     "Teams",
 }
 
+-- Roblox's class icon atlas and class groupings, following the tree treatment
+-- used by DarkDex. Expand/collapse controls use Lucide chevrons separately.
+local CLASS_ICON_ASSET = "rbxasset://textures/ClassImages.PNG"
+local CLASS_ICON_INDEX = {
+    Workspace = 19,
+    Players = 21,
+    ReplicatedFirst = 72,
+    ReplicatedStorage = 72,
+    Lighting = 13,
+    SoundService = 31,
+    StarterGui = 46,
+    StarterPack = 20,
+    StarterPlayer = 88,
+    Teams = 23,
+    Folder = 70,
+    Model = 2,
+    Part = 1,
+    MeshPart = 1,
+    UnionOperation = 77,
+    Camera = 5,
+    Humanoid = 9,
+    Player = 12,
+    Backpack = 20,
+    Script = 6,
+    LocalScript = 18,
+    ModuleScript = 71,
+    RemoteEvent = 80,
+    RemoteFunction = 79,
+    UnreliableRemoteEvent = 80,
+    BindableEvent = 67,
+    BindableFunction = 66,
+    ScreenGui = 47,
+    Frame = 48,
+    ScrollingFrame = 48,
+    TextLabel = 50,
+    TextButton = 51,
+    TextBox = 51,
+    ImageLabel = 49,
+    ImageButton = 52,
+    BillboardGui = 64,
+    SurfaceGui = 64,
+    Attachment = 34,
+    Weld = 34,
+    WeldConstraint = 34,
+    Motor6D = 34,
+    BoolValue = 4,
+    IntValue = 4,
+    NumberValue = 4,
+    StringValue = 4,
+    ObjectValue = 4,
+    Vector3Value = 4,
+    CFrameValue = 4,
+    Color3Value = 4,
+    Sound = 11,
+    Animation = 60,
+    Animator = 60,
+    ParticleEmitter = 69,
+    Decal = 7,
+    Texture = 10,
+    PointLight = 13,
+    SpotLight = 13,
+    SurfaceLight = 13,
+    ProximityPrompt = 124,
+    ClickDetector = 41,
+    TouchTransmitter = 37,
+    Tool = 17,
+}
+
+local CLASS_ICON_FALLBACKS = {
+    { "BasePart", 1 },
+    { "LuaSourceContainer", 6 },
+    { "GuiButton", 51 },
+    { "GuiObject", 48 },
+    { "LayerCollector", 47 },
+    { "Light", 13 },
+    { "ValueBase", 4 },
+    { "Constraint", 89 },
+    { "JointInstance", 34 },
+}
+
 local COMMON_PROPERTIES = {
     "Name",
     "Archivable",
@@ -199,9 +279,19 @@ function Explorer.mount(ctx)
     local pickMode = false
     local MAX_ROWS = 320
     local MAX_SEARCH_ROWS = 180
+    local RENDER_BATCH = 28
     local treeConnections = {}
     local propertyConnections = {}
     local searchLoader
+    local treeLoader
+    local renderToken = 0
+    local childState = setmetatable({}, { __mode = "k" })
+    local environment = (getgenv and getgenv()) or _G
+    local getNilInstances = rawget(environment, "getnilinstances")
+    local NIL_ROOT = {
+        ClassName = "Folder",
+        Name = "Nil Instances",
+    }
 
     local function disconnectAll(connections)
         for _, connection in ipairs(connections) do
@@ -219,11 +309,17 @@ function Explorer.mount(ctx)
     end
 
     ctx:cleanup(function()
+        searchToken = searchToken + 1
+        renderToken = renderToken + 1
         disconnectAll(treeConnections)
         disconnectAll(propertyConnections)
         if searchLoader then
             searchLoader:destroy()
             searchLoader = nil
+        end
+        if treeLoader then
+            treeLoader:destroy()
+            treeLoader = nil
         end
     end)
 
@@ -349,12 +445,13 @@ function Explorer.mount(ctx)
         Spacing = 4,
     })
 
-    local function safeChildren(instance)
-        local ok, children = pcall(function()
-            return instance:GetChildren()
-        end)
-        if not ok then
-            return {}
+    local function sortAndCap(children)
+        if #children > 2000 then
+            local capped = {}
+            for index = 1, 2000 do
+                capped[index] = children[index]
+            end
+            children = capped
         end
 
         table.sort(children, function(left, right)
@@ -363,18 +460,65 @@ function Explorer.mount(ctx)
             end
             return left.ClassName < right.ClassName
         end)
-
-        if #children > 2000 then
-            local capped = {}
-            for index = 1, 2000 do
-                capped[index] = children[index]
-            end
-            return capped
-        end
         return children
     end
 
+    local function nilChildren()
+        if type(getNilInstances) ~= "function" then
+            return {}
+        end
+        local ok, instances = pcall(getNilInstances)
+        if not ok or type(instances) ~= "table" then
+            return {}
+        end
+
+        local result = {}
+        for index = 1, math.min(#instances, 500) do
+            if typeof(instances[index]) == "Instance" then
+                table.insert(result, instances[index])
+            end
+        end
+        return sortAndCap(result)
+    end
+
+    local function safeChildren(instance)
+        if instance == NIL_ROOT then
+            return nilChildren()
+        end
+
+        local ok, children = pcall(instance.GetChildren, instance)
+        if not ok then
+            return {}
+        end
+        return sortAndCap(children)
+    end
+
+    local function hasChildren(instance)
+        local cached = childState[instance]
+        if cached ~= nil then
+            return cached
+        end
+
+        local children
+        if instance == NIL_ROOT then
+            childState[instance] = type(getNilInstances) == "function"
+            return childState[instance]
+        else
+            local ok
+            ok, children = pcall(instance.GetChildren, instance)
+            if not ok then
+                children = {}
+            end
+        end
+        local result = #children > 0
+        childState[instance] = result
+        return result
+    end
+
     local function rawChildren(instance)
+        if instance == NIL_ROOT then
+            return nilChildren()
+        end
         local ok, children = pcall(instance.GetChildren, instance)
         if not ok then
             return {}
@@ -391,15 +535,8 @@ function Explorer.mount(ctx)
             end
         end
 
-        local environment = (getgenv and getgenv()) or _G
-        local getNilInstances = rawget(environment, "getnilinstances") or getnilinstances
         if type(getNilInstances) == "function" then
-            local ok, instances = pcall(getNilInstances)
-            if ok and type(instances) == "table" then
-                for index = 1, math.min(#instances, 150) do
-                    table.insert(result, instances[index])
-                end
-            end
+            table.insert(result, NIL_ROOT)
         end
 
         return result
@@ -582,6 +719,11 @@ function Explorer.mount(ctx)
     end
 
     local function choose(instance)
+        if instance == NIL_ROOT then
+            expanded[instance] = not expanded[instance]
+            renderTree()
+            return
+        end
         ctx:setSelection(instance)
         renderProperties(instance)
         for target, row in pairs(rowByInstance) do
@@ -591,15 +733,46 @@ function Explorer.mount(ctx)
         end
     end
 
+    local function classIconIndex(instance)
+        local exact = CLASS_ICON_INDEX[instance.ClassName]
+        if exact then
+            return exact
+        end
+        if typeof(instance) == "Instance" then
+            for _, fallback in ipairs(CLASS_ICON_FALLBACKS) do
+                local ok, matches = pcall(instance.IsA, instance, fallback[1])
+                if ok and matches then
+                    return fallback[2]
+                end
+            end
+        end
+        return 0
+    end
+
+    local function makeClassIcon(instance, parent, position)
+        local iconIndex = classIconIndex(instance)
+        return UI.create("ImageLabel", {
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Image = CLASS_ICON_ASSET,
+            ImageRectOffset = Vector2.new(iconIndex * 16, 0),
+            ImageRectSize = Vector2.new(16, 16),
+            Position = position,
+            ScaleType = Enum.ScaleType.Fit,
+            Size = UDim2.fromOffset(20, 20),
+            Parent = parent,
+        })
+    end
+
     local function makeRow(instance, depth, order, knownChildren)
-        local children = knownChildren or safeChildren(instance)
-        local hasChildren = #children > 0
+        local nodeHasChildren = knownChildren ~= nil and #knownChildren > 0
+            or knownChildren == nil and hasChildren(instance)
         local row = UI.create("TextButton", {
             AutoButtonColor = false,
             BackgroundColor3 = ctx:getSelection() == instance and Theme.accentSoft or Theme.surface,
             BorderSizePixel = 0,
             LayoutOrder = order,
-            Size = UDim2.new(1, 0, 0, 28),
+            Size = UDim2.new(1, 0, 0, 32),
             Text = "",
             Parent = tree,
         })
@@ -610,32 +783,29 @@ function Explorer.mount(ctx)
             AutoButtonColor = false,
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
-            Font = Enum.Font.Code,
-            Position = UDim2.fromOffset(6 + depth * 15, 0),
-            Size = UDim2.fromOffset(18, 28),
-            Text = hasChildren and (expanded[instance] and "▾" or "▸") or "·",
-            TextColor3 = hasChildren and Theme.textMuted or Theme.textFaint,
-            TextSize = 12,
+            Position = UDim2.fromOffset(4 + depth * 18, 0),
+            Size = UDim2.fromOffset(24, 32),
+            Text = "",
             Parent = row,
         })
-        local classBadge = UI.label({
-            BackgroundColor3 = Theme.surfaceRaised,
-            BackgroundTransparency = 0,
-            Font = Enum.Font.GothamBold,
-            Position = UDim2.fromOffset(27 + depth * 15, 6),
-            Size = UDim2.fromOffset(28, 16),
-            Text = instance.ClassName:sub(1, 2):upper(),
-            TextColor3 = Theme.cyan,
-            TextSize = 7,
-            Parent = row,
-        })
-        UI.corner(classBadge, 4)
+        if nodeHasChildren then
+            UI.icon({
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Color = Theme.icon,
+                Icon = expanded[instance] and "chevron-down" or "chevron-right",
+                Position = UDim2.fromScale(0.5, 0.5),
+                Size = UDim2.fromOffset(18, 18),
+                Parent = expandButton,
+            })
+        end
+        makeClassIcon(instance, row, UDim2.fromOffset(31 + depth * 18, 6))
         UI.label({
-            Position = UDim2.fromOffset(62 + depth * 15, 0),
-            Size = UDim2.new(1, -68 - depth * 15, 1, 0),
+            Font = Enum.Font.GothamMedium,
+            Position = UDim2.fromOffset(58 + depth * 18, 0),
+            Size = UDim2.new(1, -66 - depth * 18, 1, 0),
             Text = instance.Name,
             TextColor3 = Theme.text,
-            TextSize = 10,
+            TextSize = 12,
             TextTruncate = Enum.TextTruncate.AtEnd,
             TextXAlignment = Enum.TextXAlignment.Left,
             Parent = row,
@@ -644,13 +814,15 @@ function Explorer.mount(ctx)
         connectDynamic(treeConnections, row.MouseButton1Click, function()
             choose(instance)
         end)
-        if hasChildren then
+        if nodeHasChildren then
             connectDynamic(treeConnections, expandButton.MouseButton1Click, function()
                 expanded[instance] = not expanded[instance]
+                childState[instance] = nil
                 renderTree()
             end)
             connectDynamic(treeConnections, row.MouseButton2Click, function()
                 expanded[instance] = not expanded[instance]
+                childState[instance] = nil
                 renderTree()
             end)
         end
@@ -671,8 +843,9 @@ function Explorer.mount(ctx)
             local instance = queue[head]
             head = head + 1
             visited = visited + 1
-            if instance.Name:lower():find(normalized, 1, true)
-                or instance.ClassName:lower():find(normalized, 1, true)
+            if instance ~= NIL_ROOT
+                and (instance.Name:lower():find(normalized, 1, true)
+                    or instance.ClassName:lower():find(normalized, 1, true))
             then
                 table.insert(matches, instance)
             end
@@ -685,7 +858,7 @@ function Explorer.mount(ctx)
                 end
             end
 
-            if visited % 350 == 0 then
+            if visited % 100 == 0 then
                 if onProgress then
                     onProgress(visited, #matches)
                 end
@@ -701,9 +874,15 @@ function Explorer.mount(ctx)
             return
         end
 
+        renderToken = renderToken + 1
+        local currentRender = renderToken
         if searchLoader then
             searchLoader:destroy()
             searchLoader = nil
+        end
+        if treeLoader then
+            treeLoader:destroy()
+            treeLoader = nil
         end
         local scrollPosition = tree.CanvasPosition
         disconnectAll(treeConnections)
@@ -718,7 +897,7 @@ function Explorer.mount(ctx)
             treeTitle.Text = "SEARCHING…"
             local loader = UI.loader({
                 Detail = "Preparing bounded DataModel scan…",
-                LayoutOrder = 1,
+                LayoutOrder = -1,
                 Parent = tree,
                 Size = UDim2.new(1, 0, 0, 136),
                 Title = "Searching instances",
@@ -736,15 +915,27 @@ function Explorer.mount(ctx)
                     return
                 end
 
+                local preserve = {
+                    [loader.frame] = true,
+                }
+                UI.clear(tree, preserve)
+                local visibleCount = math.min(#matches, MAX_SEARCH_ROWS)
+                for index = 1, visibleCount do
+                    if token ~= searchToken or not ctx:isActive() then
+                        return
+                    end
+                    local instance = matches[index]
+                    makeRow(instance, 0, index, {})
+                    if index % RENDER_BATCH == 0 then
+                        loader:setDetail(
+                            ("Rendering results… %d / %d rows"):format(index, visibleCount)
+                        )
+                        task.wait()
+                    end
+                end
                 loader:destroy()
                 if searchLoader == loader then
                     searchLoader = nil
-                end
-                UI.clear(tree)
-                local visibleCount = math.min(#matches, MAX_SEARCH_ROWS)
-                for index = 1, visibleCount do
-                    local instance = matches[index]
-                    makeRow(instance, 0, index, {})
                 end
                 treeTitle.Text = ("SEARCH RESULTS · %d / %d SHOWN"):format(
                     visibleCount,
@@ -758,36 +949,78 @@ function Explorer.mount(ctx)
         end
 
         searchToken = searchToken + 1
-        local function append(instance, depth)
-            if order >= MAX_ROWS then
+        treeTitle.Text = "LOADING DATA MODEL…"
+        treeMeta.Text = "Building visible rows in responsive batches"
+        local loader = UI.loader({
+            Detail = "Preparing collapsed roots…",
+            LayoutOrder = -1,
+            Parent = tree,
+            Size = UDim2.new(1, 0, 0, 104),
+            Title = "Loading Explorer",
+        })
+        treeLoader = loader
+
+        task.spawn(function()
+            task.wait()
+            if currentRender ~= renderToken or not ctx:isActive() then
                 return
             end
-            local children = safeChildren(instance)
-            order = order + 1
-            makeRow(instance, depth, order, children)
-            if expanded[instance] then
-                for _, child in ipairs(children) do
-                    append(child, depth + 1)
-                    if order >= MAX_ROWS then
-                        break
+
+            local function append(instance, depth)
+                if currentRender ~= renderToken or order >= MAX_ROWS then
+                    return false
+                end
+
+                local children = expanded[instance] and safeChildren(instance) or nil
+                order = order + 1
+                makeRow(instance, depth, order, children)
+                if order % RENDER_BATCH == 0 then
+                    loader:setDetail(("%d visible rows prepared…"):format(order))
+                    task.wait()
+                    if currentRender ~= renderToken or not ctx:isActive() then
+                        return false
                     end
                 end
-            end
-        end
 
-        for _, instance in ipairs(roots()) do
-            append(instance, 0)
-        end
-        treeTitle.Text = ("DATA MODEL · %d VISIBLE"):format(order)
-        treeMeta.Text = order >= MAX_ROWS and "Visible row cap reached" or "Right-click or double-click to expand"
-        task.defer(function()
-            if tree.Parent then
-                tree.CanvasPosition = scrollPosition
+                if expanded[instance] and children then
+                    for _, child in ipairs(children) do
+                        if append(child, depth + 1) == false or order >= MAX_ROWS then
+                            break
+                        end
+                    end
+                end
+                return true
             end
+
+            for _, instance in ipairs(roots()) do
+                if append(instance, 0) == false or order >= MAX_ROWS then
+                    break
+                end
+            end
+
+            if currentRender ~= renderToken or not ctx:isActive() then
+                return
+            end
+            loader:destroy()
+            if treeLoader == loader then
+                treeLoader = nil
+            end
+            treeTitle.Text = ("DATA MODEL · %d VISIBLE"):format(order)
+            treeMeta.Text = order >= MAX_ROWS
+                and "Visible row cap reached"
+                or "Click a Lucide arrow or right-click a row to expand"
+            task.defer(function()
+                if tree.Parent and currentRender == renderToken then
+                    tree.CanvasPosition = scrollPosition
+                end
+            end)
         end)
     end
 
-    ctx:connect(refreshButton.MouseButton1Click, renderTree)
+    ctx:connect(refreshButton.MouseButton1Click, function()
+        childState = setmetatable({}, { __mode = "k" })
+        renderTree()
+    end)
     ctx:connect(search:GetPropertyChangedSignal("Text"), function()
         searchToken = searchToken + 1
         local token = searchToken
@@ -833,8 +1066,10 @@ function Explorer.mount(ctx)
     ctx:on("selectionChanged", function(instance, source)
         if source ~= ctx.id then
             renderProperties(instance)
-            if ctx:isActive() then
-                renderTree()
+            for target, row in pairs(rowByInstance) do
+                if row and row.Parent then
+                    row.BackgroundColor3 = target == instance and Theme.accentSoft or Theme.surface
+                end
             end
         end
     end)
@@ -844,16 +1079,18 @@ function Explorer.mount(ctx)
             renderProperties(ctx:getSelection())
         else
             searchToken = searchToken + 1
+            renderToken = renderToken + 1
             if searchLoader then
                 searchLoader:destroy()
                 searchLoader = nil
             end
+            if treeLoader then
+                treeLoader:destroy()
+                treeLoader = nil
+            end
         end
     end)
 
-    for _, root in ipairs(roots()) do
-        expanded[root] = true
-    end
     renderTree()
     renderProperties(ctx:getSelection())
 

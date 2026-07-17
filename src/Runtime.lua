@@ -125,6 +125,36 @@ local function copyText(text)
     return ok, ok and nil or tostring(message)
 end
 
+local function executorIdentity()
+    local environment = (getgenv and getgenv()) or _G
+    local candidates = {
+        "identifyexecutor",
+        "getexecutorname",
+        "getexecutor",
+    }
+
+    for _, functionName in ipairs(candidates) do
+        local identify = rawget(environment, functionName)
+        if identify == nil and type(_G) == "table" then
+            identify = rawget(_G, functionName)
+        end
+        if type(identify) == "function" then
+            local ok, name, version = pcall(identify)
+            if ok and name ~= nil and tostring(name) ~= "" then
+                local cleanName = tostring(name):gsub("[%c\r\n]", " ")
+                local cleanVersion = version ~= nil
+                    and tostring(version):gsub("[%c\r\n]", " ") or ""
+                if cleanVersion ~= "" and not cleanName:find(cleanVersion, 1, true) then
+                    return cleanName .. " " .. cleanVersion
+                end
+                return cleanName
+            end
+        end
+    end
+
+    return "Unknown executor"
+end
+
 function Runtime.start(config)
     assert(type(config) == "table", "Runtime.start requires a config table")
     assert(type(config.execute) == "function", "Runtime.start requires a module executor")
@@ -168,21 +198,18 @@ function Runtime.start(config)
         shuttingDown = UI.Signal(),
     }
 
-    if type(UI.configureAssets) == "function" then
-        pcall(UI.configureAssets, {
-            fetch = config.fetch,
-        })
-    end
-
+    local executorName = executorIdentity()
     local window = UI.new({
         Name = "KryptDbg",
         Title = manifest.name,
-        Subtitle = "One workspace · lazy feature modules",
+        Subtitle = "Readable, responsive runtime workspace",
         Size = Vector2.new(1100, 700),
         MinimumSize = Vector2.new(860, 520),
         MaximumSize = Vector2.new(1380, 860),
+        Watermark = ("%s  |  %s"):format(manifest.name, executorName),
     })
     app.window = window
+    app.executorName = executorName
 
     local featureById = {}
     for order, feature in ipairs(manifest.features) do

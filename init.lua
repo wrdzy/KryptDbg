@@ -86,8 +86,8 @@ local function createBootstrapLoader()
     title.Position = UDim2.fromOffset(58, 10)
     title.Size = UDim2.new(1, -72, 0, 20)
     title.Text = "Starting KryptDbg…"
-    title.TextColor3 = Color3.fromRGB(235, 238, 245)
-    title.TextSize = 12
+    title.TextColor3 = Color3.fromRGB(248, 250, 252)
+    title.TextSize = 14
     title.TextXAlignment = Enum.TextXAlignment.Left
     title.Parent = card
 
@@ -97,8 +97,8 @@ local function createBootstrapLoader()
     detail.Position = UDim2.fromOffset(58, 31)
     detail.Size = UDim2.new(1, -72, 0, 18)
     detail.Text = "Preparing loader"
-    detail.TextColor3 = Color3.fromRGB(150, 158, 176)
-    detail.TextSize = 9
+    detail.TextColor3 = Color3.fromRGB(205, 213, 225)
+    detail.TextSize = 11
     detail.TextTruncate = Enum.TextTruncate.AtEnd
     detail.TextXAlignment = Enum.TextXAlignment.Left
     detail.Parent = card

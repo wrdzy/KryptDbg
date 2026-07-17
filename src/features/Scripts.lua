@@ -23,13 +23,15 @@ function Scripts.mount(ctx)
         selected = nil,
         indexing = false,
         indexToken = 0,
+        renderToken = 0,
         sourceCache = setmetatable({}, { __mode = "k" }),
         pathCache = setmetatable({}, { __mode = "k" }),
     }
     local rowConnections = {}
     local rowByInstance = setmetatable({}, { __mode = "k" })
     local searchToken = 0
-    local MAX_VISIBLE_ROWS = 160
+    local MAX_VISIBLE_ROWS = 100
+    local RENDER_BATCH = 24
     local indexLoader
     local sourceLoader
 
@@ -290,6 +292,8 @@ function Scripts.mount(ctx)
         if not ctx:isActive() then
             return
         end
+        state.renderToken = state.renderToken + 1
+        local currentRender = state.renderToken
         clearRowConnections()
         local preserve = {}
         if indexLoader and indexLoader.frame.Parent == list then
@@ -311,6 +315,9 @@ function Scripts.mount(ctx)
 
         local visibleCount = math.min(#filtered, MAX_VISIBLE_ROWS)
         for index = 1, visibleCount do
+            if currentRender ~= state.renderToken or not ctx:isActive() then
+                return
+            end
             local instance = filtered[index]
             local active = instance == state.selected
             local row = UI.create("TextButton", {
@@ -365,8 +372,19 @@ function Scripts.mount(ctx)
             table.insert(rowConnections, row.MouseButton1Click:Connect(function()
                 selectScript(instance)
             end))
+            if index % RENDER_BATCH == 0 then
+                if indexLoader then
+                    indexLoader:setDetail(
+                        ("Rendering script rows… %d / %d"):format(index, visibleCount)
+                    )
+                end
+                task.wait()
+            end
         end
 
+        if currentRender ~= state.renderToken then
+            return
+        end
         countLabel.Text = ("SCRIPT INDEX · %d shown / %d matches / %d total"):format(
             visibleCount,
             #filtered,
@@ -381,6 +399,7 @@ function Scripts.mount(ctx)
 
         state.indexing = true
         state.indexToken = state.indexToken + 1
+        state.renderToken = state.renderToken + 1
         local token = state.indexToken
         state.index = {}
         state.pathCache = setmetatable({}, { __mode = "k" })
@@ -425,7 +444,7 @@ function Scripts.mount(ctx)
                         end
                     end
 
-                    if visited % 350 == 0 then
+                    if visited % 100 == 0 then
                         indexStatus.Text = ("Scanning… %d visited · %d scripts"):format(
                             visited,
                             #state.index
@@ -442,8 +461,11 @@ function Scripts.mount(ctx)
                     end
                 end
 
+                for _, instance in ipairs(state.index) do
+                    pathFor(instance)
+                end
                 table.sort(state.index, function(left, right)
-                    return left:GetFullName():lower() < right:GetFullName():lower()
+                    return pathFor(left):lower() < pathFor(right):lower()
                 end)
             end)
 
@@ -451,11 +473,11 @@ function Scripts.mount(ctx)
                 return
             end
             state.indexing = false
-            loader:destroy()
-            if indexLoader == loader then
-                indexLoader = nil
-            end
             if not completed then
+                loader:destroy()
+                if indexLoader == loader then
+                    indexLoader = nil
+                end
                 indexStatus.Text = "Indexing failed"
                 indexStatus.TextColor3 = Theme.red
                 ctx:toast("Script indexing failed: " .. tostring(failure), Theme.red, 4)
@@ -464,6 +486,10 @@ function Scripts.mount(ctx)
             indexStatus.Text = ("%d instances visited · index capped at 700 scripts"):format(visited)
             indexStatus.TextColor3 = Theme.green
             renderIndex()
+            loader:destroy()
+            if indexLoader == loader then
+                indexLoader = nil
+            end
         end)
     end
 
@@ -525,6 +551,7 @@ function Scripts.mount(ctx)
         refresh = rebuildIndex,
         destroy = function()
             state.indexToken = state.indexToken + 1
+            state.renderToken = state.renderToken + 1
         end,
     }
 end

@@ -15,27 +15,28 @@ KryptUI.Theme = {
     surfaceRaised = Color3.fromRGB(33, 37, 46),
     surfaceHover = Color3.fromRGB(40, 45, 56),
     input = Color3.fromRGB(20, 23, 29),
-    border = Color3.fromRGB(50, 56, 69),
-    borderSoft = Color3.fromRGB(39, 44, 54),
-    text = Color3.fromRGB(235, 238, 245),
-    textMuted = Color3.fromRGB(150, 158, 176),
-    textFaint = Color3.fromRGB(103, 112, 132),
-    accent = Color3.fromRGB(73, 137, 255),
-    accentSoft = Color3.fromRGB(32, 58, 102),
-    cyan = Color3.fromRGB(58, 200, 230),
-    green = Color3.fromRGB(72, 194, 125),
-    yellow = Color3.fromRGB(235, 183, 75),
-    red = Color3.fromRGB(236, 92, 104),
+    border = Color3.fromRGB(76, 85, 104),
+    borderSoft = Color3.fromRGB(54, 61, 75),
+    text = Color3.fromRGB(248, 250, 252),
+    textMuted = Color3.fromRGB(205, 213, 225),
+    textFaint = Color3.fromRGB(164, 174, 194),
+    icon = Color3.fromRGB(226, 232, 240),
+    accent = Color3.fromRGB(96, 165, 250),
+    accentSoft = Color3.fromRGB(35, 76, 135),
+    cyan = Color3.fromRGB(103, 232, 249),
+    green = Color3.fromRGB(74, 222, 128),
+    yellow = Color3.fromRGB(250, 204, 21),
+    red = Color3.fromRGB(251, 113, 133),
     transparent = Color3.fromRGB(255, 255, 255),
 }
 
 KryptUI.Metrics = {
     radius = 8,
-    header = 48,
-    rail = 74,
-    status = 28,
-    toolbar = 42,
-    row = 32,
+    header = 54,
+    rail = 90,
+    status = 32,
+    toolbar = 46,
+    row = 36,
 }
 
 local Theme = KryptUI.Theme
@@ -50,6 +51,8 @@ local LucideAssets = {
     ["box"] = { 16898612819, 771, 196, 96, 0 },
     ["bug"] = { 16898612819, 257, 967, 144, 0 },
     ["circle-check"] = { 16898612819, 869, 955, 192, 0 },
+    ["chevron-down"] = { 16898612819, 196, 918 },
+    ["chevron-right"] = { 16898612819, 869, 759 },
     ["copy"] = { 16898613044, 918, 612, 240, 0 },
     ["file-code-2"] = { 16898613353, 918, 0, 288, 0 },
     ["file-output"] = { 16898613353, 661, 771, 336, 0 },
@@ -112,7 +115,7 @@ function KryptUI.configureAssets(options)
         return false
     end
 
-    local filename = "KryptDbg_lucide_1_1_0.png"
+    local filename = "KryptDbg_lucide_1_2_0.png"
     local fetched, contents = pcall(config.fetch, "assets/lucide-kryptdbg.png")
     if not fetched or type(contents) ~= "string" or contents == "" then
         return false
@@ -233,13 +236,16 @@ local function textObject(className, properties)
     local defaults = {
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Font = Enum.Font.Gotham,
+        Font = Enum.Font.GothamMedium,
         TextColor3 = Theme.text,
         TextSize = 12,
     }
 
     for key, value in pairs(properties or {}) do
         defaults[key] = value
+    end
+    if type(defaults.TextSize) == "number" then
+        defaults.TextSize = math.max(defaults.TextSize, 11)
     end
 
     return KryptUI.create(className, defaults)
@@ -253,21 +259,22 @@ function KryptUI.icon(properties)
     local options = properties or {}
     local asset = LucideAssets[options.Icon]
     assert(asset, "Unknown Lucide icon: " .. tostring(options.Icon))
+    local useBundled = LucideContentId ~= nil and asset[4] ~= nil and asset[5] ~= nil
 
     return KryptUI.create("ImageLabel", {
         AnchorPoint = options.AnchorPoint or Vector2.new(0, 0),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Image = LucideContentId or "rbxassetid://" .. asset[1],
-        ImageColor3 = options.ImageColor3 or options.Color or Theme.text,
-        ImageRectOffset = LucideContentId and Vector2.new(asset[4], asset[5])
+        Image = useBundled and LucideContentId or "rbxassetid://" .. asset[1],
+        ImageColor3 = options.ImageColor3 or options.Color or Theme.icon,
+        ImageRectOffset = useBundled and Vector2.new(asset[4], asset[5])
             or Vector2.new(asset[2], asset[3]),
         ImageRectSize = Vector2.new(48, 48),
         ImageTransparency = options.ImageTransparency or 0,
         Name = options.Name or "LucideIcon",
         Position = options.Position or UDim2.fromOffset(0, 0),
         ScaleType = Enum.ScaleType.Fit,
-        Size = options.Size or UDim2.fromOffset(options.Width or 18, options.Height or 18),
+        Size = options.Size or UDim2.fromOffset(options.Width or 20, options.Height or 20),
         ZIndex = options.ZIndex or 1,
         Parent = options.Parent,
     })
@@ -277,9 +284,10 @@ function KryptUI.setIcon(instance, iconName, color)
     local asset = LucideAssets[iconName]
     assert(asset, "Unknown Lucide icon: " .. tostring(iconName))
     assert(instance and instance:IsA("ImageLabel"), "KryptUI.setIcon requires an ImageLabel")
+    local useBundled = LucideContentId ~= nil and asset[4] ~= nil and asset[5] ~= nil
 
-    instance.Image = LucideContentId or "rbxassetid://" .. asset[1]
-    instance.ImageRectOffset = LucideContentId and Vector2.new(asset[4], asset[5])
+    instance.Image = useBundled and LucideContentId or "rbxassetid://" .. asset[1]
+    instance.ImageRectOffset = useBundled and Vector2.new(asset[4], asset[5])
         or Vector2.new(asset[2], asset[3])
     instance.ImageRectSize = Vector2.new(48, 48)
     if color then
@@ -307,11 +315,11 @@ function KryptUI.button(properties)
     KryptUI.stroke(button, options.StrokeColor or Theme.border, options.StrokeTransparency or 0.25)
 
     if options.Icon then
-        local iconSize = options.IconSize or 14
+        local iconSize = options.IconSize or 16
         local centered = options.IconOnly == true
         KryptUI.icon({
             AnchorPoint = centered and Vector2.new(0.5, 0.5) or Vector2.new(0, 0.5),
-            Color = options.IconColor or options.TextColor3 or Theme.textMuted,
+            Color = options.IconColor or options.TextColor3 or Theme.icon,
             Icon = options.Icon,
             Name = "LucideIcon",
             Position = centered and UDim2.fromScale(0.5, 0.5)
@@ -706,7 +714,7 @@ function KryptUI.new(options)
         BackgroundColor3 = Theme.accent,
         BorderSizePixel = 0,
         Position = UDim2.fromOffset(14, 13),
-        Size = UDim2.fromOffset(22, 22),
+        Size = UDim2.fromOffset(28, 28),
         Parent = header,
     })
     KryptUI.corner(mark, 6)
@@ -715,25 +723,25 @@ function KryptUI.new(options)
         Color = Theme.text,
         Icon = "bug",
         Position = UDim2.fromScale(0.5, 0.5),
-        Size = UDim2.fromOffset(13, 13),
+        Size = UDim2.fromOffset(18, 18),
         Parent = mark,
     })
 
     KryptUI.label({
         Font = Enum.Font.GothamBold,
-        Position = UDim2.fromOffset(46, 8),
+        Position = UDim2.fromOffset(52, 8),
         Size = UDim2.fromOffset(160, 20),
         Text = config.Title or "KryptDbg",
-        TextSize = 14,
+        TextSize = 15,
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = header,
     })
     self.subtitle = KryptUI.label({
-        Position = UDim2.fromOffset(46, 26),
+        Position = UDim2.fromOffset(52, 28),
         Size = UDim2.fromOffset(250, 14),
         Text = config.Subtitle or "Runtime debugging workspace",
-        TextColor3 = Theme.textFaint,
-        TextSize = 9,
+        TextColor3 = Theme.textMuted,
+        TextSize = 11,
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = header,
     })
@@ -747,7 +755,7 @@ function KryptUI.new(options)
         Size = UDim2.fromOffset(112, 24),
         Text = "0 modules loaded",
         TextColor3 = Theme.textMuted,
-        TextSize = 9,
+        TextSize = 11,
         Parent = header,
     })
     KryptUI.corner(loadedBadge, 6)
@@ -785,8 +793,8 @@ function KryptUI.new(options)
 
     local railList = KryptUI.create("Frame", {
         BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(7, 8),
-        Size = UDim2.new(1, -14, 1, -16),
+        Position = UDim2.fromOffset(8, 8),
+        Size = UDim2.new(1, -16, 1, -16),
         Parent = rail,
     })
     KryptUI.list(railList, Enum.FillDirection.Vertical, 7, Enum.HorizontalAlignment.Center)
@@ -819,17 +827,17 @@ function KryptUI.new(options)
         AnchorPoint = Vector2.new(0, 0.5),
         BackgroundColor3 = Theme.green,
         BorderSizePixel = 0,
-        Position = UDim2.fromOffset(12, 14),
+        Position = UDim2.new(0, 12, 0.5, 0),
         Size = UDim2.fromOffset(7, 7),
         Parent = statusBar,
     })
     KryptUI.corner(statusDot, 7)
     local statusText = KryptUI.label({
         Position = UDim2.fromOffset(26, 0),
-        Size = UDim2.new(1, -150, 1, 0),
+        Size = UDim2.new(1, -450, 1, 0),
         Text = "Ready",
         TextColor3 = Theme.textMuted,
-        TextSize = 10,
+        TextSize = 11,
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = statusBar,
     })
@@ -839,14 +847,28 @@ function KryptUI.new(options)
     local hint = KryptUI.label({
         AnchorPoint = Vector2.new(1, 0),
         Position = UDim2.new(1, -10, 0, 0),
-        Size = UDim2.fromOffset(220, Metrics.status),
-        Text = "RightShift · show / hide",
-        TextColor3 = Theme.textFaint,
-        TextSize = 9,
+        Size = UDim2.fromOffset(420, Metrics.status),
+        Text = "",
+        TextColor3 = Theme.textMuted,
+        TextSize = 11,
         TextXAlignment = Enum.TextXAlignment.Right,
         Parent = statusBar,
     })
     self.hint = hint
+    local watermark = tostring(config.Watermark or config.Title or "KryptDbg")
+    local function updateWatermark()
+        local ok, currentTime = pcall(os.date, "%H:%M:%S")
+        hint.Text = ("%s  |  %s"):format(ok and currentTime or "--:--:--", watermark)
+    end
+    updateWatermark()
+    task.spawn(function()
+        while not self.destroyed and hint.Parent do
+            task.wait(1)
+            if not self.destroyed and hint.Parent then
+                updateWatermark()
+            end
+        end
+    end)
 
     local toastHost = KryptUI.create("Frame", {
         AnchorPoint = Vector2.new(1, 1),
@@ -1045,7 +1067,7 @@ function Window:addTab(definition)
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
         LayoutOrder = definition.order or 0,
-        Size = UDim2.fromOffset(60, 54),
+        Size = UDim2.fromOffset(74, 60),
         Text = "",
         Parent = self.railList,
     })
@@ -1064,18 +1086,18 @@ function Window:addTab(definition)
 
     local icon = KryptUI.icon({
         AnchorPoint = Vector2.new(0.5, 0),
-        Color = Theme.textMuted,
+        Color = Theme.icon,
         Icon = definition.icon or "box",
-        Position = UDim2.new(0.5, 0, 0, 7),
-        Size = UDim2.fromOffset(19, 19),
+        Position = UDim2.new(0.5, 0, 0, 6),
+        Size = UDim2.fromOffset(23, 23),
         Parent = button,
     })
     local label = KryptUI.label({
-        Position = UDim2.fromOffset(2, 29),
-        Size = UDim2.new(1, -4, 0, 16),
+        Position = UDim2.fromOffset(2, 32),
+        Size = UDim2.new(1, -4, 0, 18),
         Text = definition.title or id,
-        TextColor3 = Theme.textFaint,
-        TextSize = 8,
+        TextColor3 = Theme.textMuted,
+        TextSize = 11,
         TextTruncate = Enum.TextTruncate.AtEnd,
         Parent = button,
     })
@@ -1139,8 +1161,8 @@ function Window:selectTab(id)
         tab.indicator.Visible = active
         tab.button.BackgroundTransparency = active and 0 or 1
         tab.button.BackgroundColor3 = active and Theme.surfaceRaised or Theme.transparent
-        tab.icon.ImageColor3 = active and Theme.accent or Theme.textMuted
-        tab.label.TextColor3 = active and Theme.text or Theme.textFaint
+        tab.icon.ImageColor3 = active and Theme.text or Theme.icon
+        tab.label.TextColor3 = active and Theme.text or Theme.textMuted
     end
 
     self.onTabSelected:fire(id)
