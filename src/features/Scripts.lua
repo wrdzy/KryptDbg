@@ -14,6 +14,29 @@ local function sanitizeFilename(value)
     return cleaned
 end
 
+-- Decompilers return a comment stub (e.g. "-- Empty bytecode") instead of
+-- throwing when there is no recoverable bytecode; treat those as no source.
+local DECOMPILE_FAILURE_PREFIXES = {
+    "-- empty bytecode",
+    "-- failed to decompile",
+    "-- could not decompile",
+    "-- unable to decompile",
+    "-- decompiler",
+    "-- script is empty",
+    "-- oh no",
+    "failed to decompile",
+}
+
+local function looksLikeDecompileFailure(source)
+    local head = source:gsub("^%s+", ""):lower()
+    for _, prefix in ipairs(DECOMPILE_FAILURE_PREFIXES) do
+        if head:sub(1, #prefix) == prefix then
+            return true
+        end
+    end
+    return false
+end
+
 function Scripts.mount(ctx)
     local UI = ctx.ui
     local Theme = ctx.theme
@@ -200,7 +223,9 @@ function Scripts.mount(ctx)
 
         if type(decompileFunction) == "function" then
             local ok, result = pcall(decompileFunction, instance)
-            if ok and type(result) == "string" and result ~= "" then
+            if ok and type(result) == "string" and result ~= ""
+                and not looksLikeDecompileFailure(result)
+            then
                 state.sourceCache[instance] = result
                 return true, result, "decompiled"
             end

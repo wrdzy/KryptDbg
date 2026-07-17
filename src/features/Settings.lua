@@ -242,6 +242,79 @@ local function encodeValue(value, depth, seen)
     return { type = kind, value = safeString(value) }
 end
 
+-- Engine-internal properties with no debugging value that getproperties returns
+-- for every instance. Dropping them roughly halves the dump and removes noise
+-- that would otherwise drown the meaningful state.
+local NOISE_PROPERTIES = {
+    ClassName = true,
+    Parent = true,
+    Name = true,
+    className = true,
+    Source = true,
+    archivable = true,
+    size = true,
+    Attributes = true,
+    AttributesSerialize = true,
+    AttributesReplicate = true,
+    Capabilities = true,
+    DefinesCapabilities = true,
+    Sandboxed = true,
+    IsInSandbox = true,
+    RobloxLocked = true,
+    Confidential = true,
+    DataCost = true,
+    HistoryId = true,
+    UniqueId = true,
+    SourceAssetId = true,
+    ReplicatedInsertionOrder = true,
+    numExpectedDirectChildren = true,
+    PropertyStatusStudio = true,
+    PredictionMode = true,
+    Tags = true,
+    ActiveQueryNames = true,
+    LocalizationMatchedSourceText = true,
+    LocalizationMatchIdentifier = true,
+    LocalizedText = true,
+    ContentText = true,
+    RawRect2D = true,
+    ClippedRect = true,
+    SelectionRect2D = true,
+    GuiState = true,
+    TotalGroupScale = true,
+    IsNotOccluded = true,
+}
+
+local function isNoiseProperty(name)
+    if NOISE_PROPERTIES[name] then
+        return true
+    end
+    -- Per-event connection-count telemetry (MouseButton1ClickConnectionCount, ...)
+    return #name > 15 and name:sub(-15) == "ConnectionCount"
+end
+
+-- Decompilers emit a comment stub instead of throwing when a script has no
+-- recoverable bytecode; those must not be saved or counted as real sources.
+local DECOMPILE_FAILURE_PREFIXES = {
+    "-- empty bytecode",
+    "-- failed to decompile",
+    "-- could not decompile",
+    "-- unable to decompile",
+    "-- decompiler",
+    "-- script is empty",
+    "-- oh no",
+    "failed to decompile",
+}
+
+local function looksLikeDecompileFailure(source)
+    local head = source:gsub("^%s+", ""):lower()
+    for _, prefix in ipairs(DECOMPILE_FAILURE_PREFIXES) do
+        if head:sub(1, #prefix) == prefix then
+            return true
+        end
+    end
+    return false
+end
+
 local function readProperties(instance, getProperties)
     local result = {}
     local seen = {}
@@ -266,7 +339,7 @@ local function readProperties(instance, getProperties)
                         name = nil
                     end
                 end
-                if name and name ~= "Source" and name ~= "Parent" and name ~= "ClassName" then
+                if name and not isNoiseProperty(name) then
                     discovered = discovered + 1
                     if discovered > MAX_PROPERTIES_PER_INSTANCE then
                         result.__truncated = true
@@ -832,7 +905,9 @@ function Settings.mount(ctx)
                     if ctx.settings.dumpScriptSources then
                         if type(decompile) == "function" then
                             local sourceOk, resultText = pcall(decompile, item.instance)
-                            if sourceOk and type(resultText) == "string" and resultText ~= "" then
+                            if sourceOk and type(resultText) == "string" and resultText ~= ""
+                                and not looksLikeDecompileFailure(resultText)
+                            then
                                 source = resultText
                                 sourceMethod = "decompile"
                             end
