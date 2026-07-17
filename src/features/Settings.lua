@@ -5,7 +5,18 @@ local MAX_INSTANCES_WITHOUT_APPEND = 15000
 local MAX_SCRIPTS = 1000
 local MAX_SOURCE_CHARS = 500000
 local MAX_PROPERTIES_PER_INSTANCE = 180
+local MAX_REMOTES = 8000
 local FLUSH_EVERY = 200
+
+-- Instances worth surfacing in their own index because they define the
+-- client/server (and client-internal) call surface an AI most often needs.
+local REMOTE_CLASSES = {
+    RemoteEvent = "server",
+    RemoteFunction = "server",
+    UnreliableRemoteEvent = "server",
+    BindableEvent = "bindable",
+    BindableFunction = "bindable",
+}
 
 local PROPERTY_GROUPS = {
     Instance = {
@@ -372,7 +383,7 @@ function Settings.mount(ctx)
         Position = UDim2.fromOffset(0, 44),
         Size = UDim2.new(1, 0, 0, 40),
         Text = ctx.workspace.available
-            and "Workspace ready. Dumps contain metadata, a JSONL instance tree, attributes, selected properties, and available script sources."
+            and "Workspace ready. Dumps contain metadata, session context, a JSONL instance tree, a remote index, attributes, selected properties, and available script sources."
             or "Filesystem APIs are unavailable. makefolder and writefile are required.",
         TextColor3 = ctx.workspace.available and Theme.textMuted or Theme.red,
         TextSize = 11,
@@ -574,8 +585,10 @@ function Settings.mount(ctx)
 
                 local HttpService = ctx.services.HttpService
                 local instancesPath = rootPath .. "/instances.jsonl"
+                local remotesPath = rootPath .. "/remotes.jsonl"
                 local scriptIndexPath = rootPath .. "/scripts/index.jsonl"
                 write(instancesPath, "")
+                write(remotesPath, "")
                 write(scriptIndexPath, "")
 
                 local buffered = {}
@@ -607,8 +620,11 @@ function Settings.mount(ctx)
                 }
                 local seen = setmetatable({}, { __mode = "k" })
                 local scripts = {}
+                local remotes = {}
                 local classCounts = {}
                 local remoteCount = 0
+                local bindableCount = 0
+                local nilInstanceCount = 0
                 local instanceLines = {}
                 local head = 1
                 local count = 0
@@ -642,12 +658,6 @@ function Settings.mount(ctx)
                         local id = count
                         local className = tostring(instance.ClassName)
                         classCounts[className] = (classCounts[className] or 0) + 1
-                        if className == "RemoteEvent"
-                            or className == "RemoteFunction"
-                            or className == "UnreliableRemoteEvent"
-                        then
-                            remoteCount = remoteCount + 1
-                        end
 
                         local record = {
                             id = id,
@@ -670,6 +680,28 @@ function Settings.mount(ctx)
                             end
                         end
                         table.insert(instanceLines, HttpService:JSONEncode(record))
+
+                        if record.nilInstance then
+                            nilInstanceCount = nilInstanceCount + 1
+                        end
+                        local remoteKind = REMOTE_CLASSES[className]
+                        if remoteKind then
+                            if remoteKind == "server" then
+                                remoteCount = remoteCount + 1
+                            else
+                                bindableCount = bindableCount + 1
+                            end
+                            if #remotes < MAX_REMOTES then
+                                table.insert(remotes, {
+                                    instanceId = id,
+                                    name = record.name,
+                                    className = className,
+                                    path = record.path,
+                                    kind = remoteKind,
+                                    nilInstance = record.nilInstance,
+                                })
+                            end
+                        end
 
                         local scriptOk, isScript = pcall(
                             instance.IsA,
@@ -717,6 +749,12 @@ function Settings.mount(ctx)
                     truncated = true
                 end
                 appendLines(instancesPath, instanceLines)
+
+                local remoteLines = {}
+                for _, remote in ipairs(remotes) do
+                    table.insert(remoteLines, HttpService:JSONEncode(remote))
+                end
+                appendLines(remotesPath, remoteLines)
 
                 local scriptLines = {}
                 local dumpedSources = 0
@@ -789,6 +827,105 @@ function Settings.mount(ctx)
                     write(path, table.concat(chunks))
                 end
 
+                -- Runtime state an AI cannot reconstruct from the static tree:
+                -- who the local player is, where their character/camera are, and
+                -- what the operator had selected when they took the snapshot.
+                local session = { formatVersion = 1, generatedAt = timestamp }
+                pcall(function()
+                    local localPlayer = ctx.services.Players.LocalPlayer
+                    if not localPlayer then
+                        return
+                    end
+                    local info = {
+                        name = tostring(localPlayer.Name),
+                        userId = localPlayer.UserId,
+                        displayName = tostring(localPlayer.DisplayName),
+                    }
+                    pcall(function()
+                        info.accountAge = localPlayer.AccountAge
+                    end)
+                    pcall(function()
+                        if localPlayer.Team then
+                            info.teamPath = safePath(localPlayer.Team)
+                        end
+                    end)
+                    local character = localPlayer.Character
+                    if character then
+                        info.characterPath = safePath(character)
+                        local humanoid = character:FindFirstChildOfClass("Humanoid")
+                        if humanoid then
+                            info.humanoid = {
+                                health = humanoid.Health,
+                                maxHealth = humanoid.MaxHealth,
+                                walkSpeed = humanoid.WalkSpeed,
+                                jumpPower = humanoid.JumpPower,
+                                state = tostring(humanoid:GetState()),
+                            }
+                        end
+                        local root = character:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            local position = root.Position
+                            info.position = { x = position.X, y = position.Y, z = position.Z }
+                        end
+                    end
+                    session.localPlayer = info
+                end)
+                pcall(function()
+                    local list = ctx.services.Players:GetPlayers()
+                    session.playerCount = #list
+                    local names = {}
+                    for index = 1, math.min(#list, 100) do
+                        names[index] = tostring(list[index].Name)
+                    end
+                    session.playerNames = names
+                end)
+                pcall(function()
+                    local camera = workspace.CurrentCamera
+                    if not camera then
+                        return
+                    end
+                    local position = camera.CFrame.Position
+                    session.camera = {
+                        cameraType = tostring(camera.CameraType),
+                        fieldOfView = camera.FieldOfView,
+                        position = { x = position.X, y = position.Y, z = position.Z },
+                    }
+                    if camera.CameraSubject then
+                        session.camera.subjectPath = safePath(camera.CameraSubject)
+                    end
+                end)
+                pcall(function()
+                    session.world = {
+                        gravity = workspace.Gravity,
+                        streamingEnabled = workspace.StreamingEnabled,
+                        distributedGameTime = workspace.DistributedGameTime,
+                    }
+                end)
+                pcall(function()
+                    local focus = ctx:getSelection()
+                    if focus then
+                        session.focusInstance = {
+                            path = safePath(focus),
+                            className = tostring(focus.ClassName),
+                        }
+                    end
+                end)
+                -- Runtime values such as Humanoid.MaxHealth can be math.huge,
+                -- which JSONEncode rejects. encodeValue normalizes inf/NaN, and a
+                -- guarded fallback keeps a late session failure from sinking a
+                -- dump whose heavy files are already on disk.
+                local sessionOk, sessionJson = pcall(function()
+                    return HttpService:JSONEncode(encodeValue(session))
+                end)
+                if not sessionOk then
+                    sessionJson = HttpService:JSONEncode({
+                        formatVersion = 1,
+                        generatedAt = timestamp,
+                        error = "session snapshot could not be encoded",
+                    })
+                end
+                write(rootPath .. "/session.json", sessionJson)
+
                 local metadata = {
                     formatVersion = 1,
                     generatedAt = timestamp,
@@ -804,7 +941,25 @@ function Settings.mount(ctx)
                     scriptCount = #scripts,
                     dumpedScriptSources = dumpedSources,
                     remoteCount = remoteCount,
+                    bindableCount = bindableCount,
+                    remoteIndexCount = #remotes,
+                    nilInstanceCount = nilInstanceCount,
+                    distinctClassCount = (function()
+                        local total = 0
+                        for _ in pairs(classCounts) do
+                            total = total + 1
+                        end
+                        return total
+                    end)(),
                     classCounts = classCounts,
+                    files = {
+                        "summary.md",
+                        "game.json",
+                        "session.json",
+                        "instances.jsonl",
+                        "remotes.jsonl",
+                        "scripts/index.jsonl",
+                    },
                     options = {
                         attributes = ctx.settings.dumpAttributes,
                         properties = ctx.settings.dumpProperties,
@@ -816,6 +971,17 @@ function Settings.mount(ctx)
                 }
                 write(rootPath .. "/game.json", HttpService:JSONEncode(metadata))
 
+                local sortedClasses = {}
+                for className, amount in pairs(classCounts) do
+                    table.insert(sortedClasses, { className = className, amount = amount })
+                end
+                table.sort(sortedClasses, function(left, right)
+                    if left.amount == right.amount then
+                        return left.className < right.className
+                    end
+                    return left.amount > right.amount
+                end)
+
                 local summary = {
                     "# KryptDbg AI Debug Dump",
                     "",
@@ -823,31 +989,64 @@ function Settings.mount(ctx)
                     ("Executor: %s"):format(ctx.app.executorName),
                     ("Place ID: %s"):format(tostring(placeId)),
                     ("Game ID: %s"):format(tostring(gameId)),
-                    ("Instances: %d%s"):format(
+                    "",
+                    "## Snapshot",
+                    "",
+                    ("- Instances: %d%s"):format(
                         count,
                         truncated and " (truncated at safety limit)" or ""
                     ),
-                    ("Scripts indexed: %d"):format(#scripts),
-                    ("Script sources saved: %d"):format(dumpedSources),
-                    ("Remotes indexed: %d"):format(remoteCount),
+                    ("- Distinct classes: %d"):format(#sortedClasses),
+                    ("- Scripts indexed: %d (%d sources saved)"):format(#scripts, dumpedSources),
+                    ("- Client/server remotes: %d"):format(remoteCount),
+                    ("- Bindable events/functions: %d"):format(bindableCount),
+                    ("- Nil-parented instances: %d"):format(nilInstanceCount),
                     "",
                     "## Files",
                     "",
-                    "- `game.json`: place metadata, options, counts, and limits.",
-                    "- `instances.jsonl`: one instance per line with hierarchy IDs.",
+                    "- `summary.md`: this overview — start here.",
+                    "- `game.json`: place metadata, options, counts, limits, and the file list.",
+                    "- `session.json`: local player, character, camera, and world state.",
+                    "- `instances.jsonl`: one instance per line with hierarchy IDs, attributes, and properties.",
+                    "- `remotes.jsonl`: every RemoteEvent/RemoteFunction and Bindable with its path.",
                     "- `scripts/index.jsonl`: script paths and source-file mapping.",
                     "- `scripts/*.lua`: available bounded script sources.",
                     "",
-                    "Start AI analysis with this summary and `game.json`, then search",
-                    "`instances.jsonl` by class/path and open only relevant script files.",
-                    "Treat all runtime values as a client-side snapshot.",
+                    "## Top classes",
+                    "",
                 }
+                for index = 1, math.min(#sortedClasses, 25) do
+                    local entry = sortedClasses[index]
+                    table.insert(summary, ("- %s x %d"):format(entry.className, entry.amount))
+                end
+                if #sortedClasses > 25 then
+                    table.insert(
+                        summary,
+                        ("- ... and %d more classes (see game.json classCounts)"):format(
+                            #sortedClasses - 25
+                        )
+                    )
+                end
+                for _, line in ipairs({
+                    "",
+                    "## How to use this dump",
+                    "",
+                    "1. Read this summary and `game.json` for shape and scale.",
+                    "2. Use `remotes.jsonl` to map the client/server surface.",
+                    "3. Search `instances.jsonl` by class or path for the subsystem you care about.",
+                    "4. Open only the relevant `scripts/*.lua` via `scripts/index.jsonl`.",
+                    "",
+                    "Treat every runtime value as a client-side snapshot from a single moment.",
+                }) do
+                    table.insert(summary, line)
+                end
                 write(rootPath .. "/summary.md", table.concat(summary, "\n"))
                 return {
                     path = rootPath,
                     count = count,
                     scripts = #scripts,
                     sources = dumpedSources,
+                    remotes = remoteCount,
                     truncated = truncated,
                 }
             end)
@@ -865,11 +1064,12 @@ function Settings.mount(ctx)
             if ok then
                 folderLabel.Text = result.path
                 dumpStatus.Text = (
-                    "Dump complete.\n%d instances | %d scripts | %d source files%s"
+                    "Dump complete.\n%d instances | %d scripts | %d sources | %d remotes%s"
                 ):format(
                     result.count,
                     result.scripts,
                     result.sources,
+                    result.remotes,
                     result.truncated and "\nSafety limit reached; see summary.md." or ""
                 )
                 dumpStatus.TextColor3 = Theme.green

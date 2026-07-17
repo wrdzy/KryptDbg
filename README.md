@@ -118,8 +118,10 @@ KryptUI is custom code and does not embed those libraries.
 
 - Live Explorer, nil-instance, property, attribute, and script-source controls
 - Creates `KryptDbg/DUMP` in the executor workspace at startup
-- Produces `summary.md`, `game.json`, `instances.jsonl`,
-  `scripts/index.jsonl`, and available bounded `scripts/*.lua` files
+- Produces `summary.md` (overview with a class breakdown and usage guide),
+  `game.json`, `session.json` (local player, character, camera, and world
+  state), `instances.jsonl`, `remotes.jsonl` (every remote and bindable with
+  its path), `scripts/index.jsonl`, and available bounded `scripts/*.lua` files
 - Uses Potassium's `getproperties` when present, with curated class-aware
   property discovery as a compatibility fallback
 - Streams large JSONL output with `appendfile` when supported
