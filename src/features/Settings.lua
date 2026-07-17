@@ -125,9 +125,36 @@ local function executorFunction(name)
     return type(value) == "function" and value or nil
 end
 
+-- JSONEncode rejects non-finite numbers, so normalize them to tags.
+local function safeNumber(value)
+    if value ~= value then
+        return "nan"
+    elseif value == math.huge then
+        return "inf"
+    elseif value == -math.huge then
+        return "-inf"
+    end
+    return value
+end
+
+-- JSONEncode also rejects invalid UTF-8, which obfuscated games frequently put
+-- in instance names. Keep valid text as-is; scrub only genuinely broken bytes.
+local function safeString(value)
+    local text = tostring(value)
+    if utf8.len(text) ~= nil then
+        return text
+    end
+    local rebuilt = table.create(#text)
+    for index = 1, #text do
+        local byte = string.byte(text, index)
+        rebuilt[index] = (byte >= 32 and byte < 127) and string.char(byte) or "?"
+    end
+    return table.concat(rebuilt)
+end
+
 local function safePath(instance)
     local ok, fullName = pcall(instance.GetFullName, instance)
-    return ok and fullName or tostring(instance.Name)
+    return safeString(ok and fullName or instance.Name)
 end
 
 local function cleanFileName(value)
@@ -147,43 +174,53 @@ local function encodeValue(value, depth, seen)
     end
 
     local kind = typeof(value)
-    if kind == "nil" or kind == "string" or kind == "boolean" then
+    if kind == "nil" or kind == "boolean" then
         return value
+    elseif kind == "string" then
+        return safeString(value)
     elseif kind == "number" then
-        if value ~= value or value == math.huge or value == -math.huge then
-            return tostring(value)
-        end
-        return value
+        return safeNumber(value)
     elseif kind == "Instance" then
         return {
             type = "Instance",
-            className = value.ClassName,
+            className = safeString(value.ClassName),
             path = safePath(value),
         }
     elseif kind == "Vector2" then
-        return { type = kind, x = value.X, y = value.Y }
+        return { type = kind, x = safeNumber(value.X), y = safeNumber(value.Y) }
     elseif kind == "Vector3" then
-        return { type = kind, x = value.X, y = value.Y, z = value.Z }
+        return {
+            type = kind,
+            x = safeNumber(value.X),
+            y = safeNumber(value.Y),
+            z = safeNumber(value.Z),
+        }
     elseif kind == "Color3" then
-        return { type = kind, r = value.R, g = value.G, b = value.B }
+        return {
+            type = kind,
+            r = safeNumber(value.R),
+            g = safeNumber(value.G),
+            b = safeNumber(value.B),
+        }
     elseif kind == "UDim" then
-        return { type = kind, scale = value.Scale, offset = value.Offset }
+        return { type = kind, scale = safeNumber(value.Scale), offset = value.Offset }
     elseif kind == "UDim2" then
         return {
             type = kind,
-            x = { scale = value.X.Scale, offset = value.X.Offset },
-            y = { scale = value.Y.Scale, offset = value.Y.Offset },
+            x = { scale = safeNumber(value.X.Scale), offset = value.X.Offset },
+            y = { scale = safeNumber(value.Y.Scale), offset = value.Y.Offset },
         }
     elseif kind == "CFrame" then
-        return {
-            type = kind,
-            components = { value:GetComponents() },
-        }
+        local components = { value:GetComponents() }
+        for index = 1, #components do
+            components[index] = safeNumber(components[index])
+        end
+        return { type = kind, components = components }
     elseif kind == "BrickColor" or kind == "EnumItem"
         or kind == "NumberRange" or kind == "NumberSequence"
         or kind == "ColorSequence" or kind == "Rect"
     then
-        return { type = kind, value = tostring(value) }
+        return { type = kind, value = safeString(value) }
     elseif kind == "table" then
         if seen[value] then
             return "<cycle>"
@@ -197,12 +234,12 @@ local function encodeValue(value, depth, seen)
                 result.__truncated = true
                 break
             end
-            result[tostring(key)] = encodeValue(nested, depth + 1, seen)
+            result[safeString(key)] = encodeValue(nested, depth + 1, seen)
         end
         seen[value] = nil
         return result
     end
-    return { type = kind, value = tostring(value) }
+    return { type = kind, value = safeString(value) }
 end
 
 local function readProperties(instance, getProperties)
@@ -584,6 +621,15 @@ function Settings.mount(ctx)
                 ensure(scriptsPath)
 
                 local HttpService = ctx.services.HttpService
+                -- Belt-and-suspenders around the sanitizers: never let a single
+                -- unencodable value abort a dump. Returns nil so the caller can
+                -- fall back or skip the line.
+                local function safeEncode(payload)
+                    local ok, json = pcall(function()
+                        return HttpService:JSONEncode(payload)
+                    end)
+                    return ok and json or nil
+                end
                 local instancesPath = rootPath .. "/instances.jsonl"
                 local remotesPath = rootPath .. "/remotes.jsonl"
                 local scriptIndexPath = rootPath .. "/scripts/index.jsonl"
@@ -662,7 +708,7 @@ function Settings.mount(ctx)
                         local record = {
                             id = id,
                             parentId = item.parentId,
-                            name = tostring(instance.Name),
+                            name = safeString(instance.Name),
                             className = className,
                             path = instance == game and "game" or safePath(instance),
                             nilInstance = item.nilInstance == true,
@@ -679,7 +725,23 @@ function Settings.mount(ctx)
                                 record.properties = properties
                             end
                         end
-                        table.insert(instanceLines, HttpService:JSONEncode(record))
+                        local encodedRecord = safeEncode(record)
+                        if not encodedRecord then
+                            -- Almost always an attribute/property value; keep the
+                            -- structural record so the tree stays complete.
+                            encodedRecord = safeEncode({
+                                id = record.id,
+                                parentId = record.parentId,
+                                name = record.name,
+                                className = record.className,
+                                path = record.path,
+                                nilInstance = record.nilInstance,
+                                encodeError = "attributes/properties omitted (unencodable value)",
+                            })
+                        end
+                        if encodedRecord then
+                            table.insert(instanceLines, encodedRecord)
+                        end
 
                         if record.nilInstance then
                             nilInstanceCount = nilInstanceCount + 1
@@ -752,7 +814,10 @@ function Settings.mount(ctx)
 
                 local remoteLines = {}
                 for _, remote in ipairs(remotes) do
-                    table.insert(remoteLines, HttpService:JSONEncode(remote))
+                    local encodedRemote = safeEncode(remote)
+                    if encodedRemote then
+                        table.insert(remoteLines, encodedRemote)
+                    end
                 end
                 appendLines(remotesPath, remoteLines)
 
@@ -798,15 +863,18 @@ function Settings.mount(ctx)
                         write(scriptsPath .. "/" .. filename, source)
                         dumpedSources = dumpedSources + 1
                     end
-                    table.insert(scriptLines, HttpService:JSONEncode({
+                    local encodedScript = safeEncode({
                         instanceId = item.instanceId,
-                        name = item.name,
+                        name = safeString(item.name),
                         className = item.className,
-                        path = item.path,
+                        path = safeString(item.path),
                         file = filename,
                         sourceMethod = sourceMethod,
                         truncated = sourceTruncated,
-                    }))
+                    })
+                    if encodedScript then
+                        table.insert(scriptLines, encodedScript)
+                    end
                     if #scriptLines >= FLUSH_EVERY then
                         appendLines(scriptIndexPath, scriptLines)
                     end
@@ -929,7 +997,7 @@ function Settings.mount(ctx)
                 local metadata = {
                     formatVersion = 1,
                     generatedAt = timestamp,
-                    executor = ctx.app.executorName,
+                    executor = safeString(ctx.app.executorName),
                     placeId = placeId,
                     gameId = gameId,
                     jobId = gameValue("JobId", ""),
@@ -969,7 +1037,18 @@ function Settings.mount(ctx)
                         nilInstances = ctx.settings.includeNilInstances,
                     },
                 }
-                write(rootPath .. "/game.json", HttpService:JSONEncode(metadata))
+                local metadataJson = safeEncode(metadata)
+                if not metadataJson then
+                    metadata.classCounts = nil
+                    metadataJson = safeEncode(metadata)
+                        or HttpService:JSONEncode({
+                            formatVersion = 1,
+                            generatedAt = timestamp,
+                            instanceCount = count,
+                            encodeError = "metadata partially omitted",
+                        })
+                end
+                write(rootPath .. "/game.json", metadataJson)
 
                 local sortedClasses = {}
                 for className, amount in pairs(classCounts) do
