@@ -1,0 +1,13 @@
+{
+  "name": "kryptdbg",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Modular Roblox runtime debugging workspace",
+  "type": "module",
+  "scripts": {
+    "test": "node tools/check.mjs"
+  },
+  "devDependencies": {
+    "luaparse": "^0.3.1"
+  }
+}
