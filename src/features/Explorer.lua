@@ -227,6 +227,29 @@ local MAX_SEARCH_RESULTS = 1000
 local BUILD_BATCH = 240
 local AUTO_UPDATE_DELAY = 0.18
 
+-- Roblox's canonical explorer order for top-level services, so the roots read
+-- like Studio/DarkDex instead of being sorted alphabetically by class name.
+local SERVICE_ORDER = {
+    Workspace = 1,
+    Players = 2,
+    Lighting = 3,
+    MaterialService = 4,
+    ReplicatedFirst = 5,
+    ReplicatedStorage = 6,
+    ServerScriptService = 7,
+    ServerStorage = 8,
+    StarterGui = 9,
+    StarterPack = 10,
+    StarterPlayer = 11,
+    Teams = 12,
+    SoundService = 13,
+    TextChatService = 14,
+    Chat = 15,
+    LocalizationService = 16,
+    ProximityPromptService = 17,
+    TestService = 18,
+}
+
 local function trim(value)
     return tostring(value):match("^%s*(.-)%s*$")
 end
@@ -604,7 +627,21 @@ function Explorer.mount(ctx)
     local function roots()
         local ok, children = pcall(game.GetChildren, game)
         local result = ok and children or {}
-        sortAndCap(result)
+        if #result > MAX_CHILDREN then
+            local capped = {}
+            for index = 1, MAX_CHILDREN do
+                capped[index] = result[index]
+            end
+            result = capped
+        end
+        table.sort(result, function(left, right)
+            local leftOrder = SERVICE_ORDER[left.ClassName] or SERVICE_ORDER[left.Name] or 1000
+            local rightOrder = SERVICE_ORDER[right.ClassName] or SERVICE_ORDER[right.Name] or 1000
+            if leftOrder ~= rightOrder then
+                return leftOrder < rightOrder
+            end
+            return tostring(left.Name):lower() < tostring(right.Name):lower()
+        end)
         if type(getNilInstances) == "function" and ctx.settings.includeNilInstances then
             table.insert(result, NIL_ROOT)
         end
@@ -673,14 +710,16 @@ function Explorer.mount(ctx)
             Size = UDim2.fromOffset(18, 18),
             Parent = expandButton,
         })
+        -- Match DarkDex: 16x16 ClassImages sprite rendered 1:1 with Crop so the
+        -- built-in class icons stay pixel-crisp instead of being upscaled.
         local classIcon = UI.create("ImageLabel", {
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
             Image = CLASS_ICON_ASSET,
             ImageRectOffset = Vector2.new(0, 0),
             ImageRectSize = Vector2.new(16, 16),
-            ScaleType = Enum.ScaleType.Fit,
-            Size = UDim2.fromOffset(20, 20),
+            ScaleType = Enum.ScaleType.Crop,
+            Size = UDim2.fromOffset(16, 16),
             Parent = row,
         })
         local label = UI.label({
@@ -749,7 +788,7 @@ function Explorer.mount(ctx)
             )
         end
         state.classIcon.ImageRectOffset = Vector2.new(classIconIndex(instance) * 16, 0)
-        state.classIcon.Position = UDim2.fromOffset(30 + indent, 4)
+        state.classIcon.Position = UDim2.fromOffset(30 + indent, 6)
         state.label.Position = UDim2.fromOffset(56 + indent, 0)
         state.label.Size = UDim2.new(1, -64 - indent, 1, 0)
         state.label.Text = tostring(instance.Name)

@@ -51,6 +51,10 @@ local LucideAssets = {
     ["box"] = { 16898612819, 771, 196, 96, 0 },
     ["bug"] = { 16898612819, 257, 967, 144, 0 },
     ["circle-check"] = { 16898612819, 869, 955, 192, 0 },
+    ["circle-alert"] = { 16898612819, 918, 808 },
+    ["circle-x"] = { 16898613044, 820, 306 },
+    ["triangle-alert"] = { 16898613869, 967, 0 },
+    ["info"] = { 16898613509, 612, 869 },
     ["chevron-down"] = { 16898612819, 196, 918 },
     ["chevron-right"] = { 16898612819, 869, 759 },
     ["cog"] = { 16898613044, 918, 563 },
@@ -939,12 +943,19 @@ function KryptUI.new(options)
         AnchorPoint = Vector2.new(1, 1),
         BackgroundTransparency = 1,
         Position = UDim2.new(1, -14, 1, -Metrics.status - 14),
-        Size = UDim2.fromOffset(320, 160),
+        Size = UDim2.fromOffset(320, 340),
         ZIndex = 50,
         Parent = root,
     })
-    KryptUI.list(toastHost, Enum.FillDirection.Vertical, 8, Enum.HorizontalAlignment.Right)
+    local toastLayout = KryptUI.list(
+        toastHost,
+        Enum.FillDirection.Vertical,
+        8,
+        Enum.HorizontalAlignment.Right
+    )
+    toastLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
     self.toastHost = toastHost
+    self.toasts = {}
 
     local minimized = false
     local savedSize = root.Size
@@ -1340,39 +1351,112 @@ function Window:toast(message, color, duration)
     if self.destroyed then
         return
     end
+    color = color or Theme.accent
 
-    local toast = KryptUI.panel({
+    -- Pick an icon from the semantic color so notifications read at a glance.
+    local iconName = "info"
+    if color == Theme.green then
+        iconName = "circle-check"
+    elseif color == Theme.red then
+        iconName = "circle-x"
+    elseif color == Theme.yellow then
+        iconName = "triangle-alert"
+    end
+
+    -- Cap the stack so a burst of events cannot fill the screen; drop the oldest.
+    self.toasts = self.toasts or {}
+    while #self.toasts >= 4 do
+        local oldest = table.remove(self.toasts, 1)
+        if oldest and oldest.Parent then
+            oldest:Destroy()
+        end
+    end
+
+    local toast = KryptUI.create("TextButton", {
+        AutoButtonColor = false,
         BackgroundColor3 = Theme.surfaceRaised,
-        Parent = self.toastHost,
-        Size = UDim2.fromOffset(300, 42),
-        StrokeColor = color or Theme.accent,
-    })
-    toast.ZIndex = 52
-    local bar = KryptUI.create("Frame", {
-        BackgroundColor3 = color or Theme.accent,
+        BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Size = UDim2.fromOffset(3, 42),
+        Size = UDim2.fromOffset(306, 48),
+        Text = "",
+        ZIndex = 52,
+        Parent = self.toastHost,
+    })
+    table.insert(self.toasts, toast)
+    KryptUI.corner(toast, 8)
+    local stroke = KryptUI.stroke(toast, color, 1)
+
+    local bar = KryptUI.create("Frame", {
+        BackgroundColor3 = color,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Position = UDim2.fromOffset(6, 7),
+        Size = UDim2.new(0, 3, 1, -14),
         ZIndex = 53,
         Parent = toast,
     })
     KryptUI.corner(bar, 3)
-    KryptUI.label({
-        Position = UDim2.fromOffset(12, 0),
-        Size = UDim2.new(1, -20, 1, 0),
-        Text = tostring(message),
-        TextColor3 = Theme.text,
-        TextSize = 10,
-        TextWrapped = true,
-        TextXAlignment = Enum.TextXAlignment.Left,
+
+    local icon = KryptUI.icon({
+        AnchorPoint = Vector2.new(0, 0.5),
+        Color = color,
+        Icon = iconName,
+        ImageTransparency = 1,
+        Position = UDim2.new(0, 16, 0.5, 0),
+        Size = UDim2.fromOffset(18, 18),
         ZIndex = 53,
         Parent = toast,
     })
 
-    task.delay(duration or 2.6, function()
-        if toast.Parent then
-            toast:Destroy()
+    local label = KryptUI.label({
+        Position = UDim2.fromOffset(44, 0),
+        Size = UDim2.new(1, -56, 1, 0),
+        Text = tostring(message),
+        TextColor3 = Theme.text,
+        TextSize = 11,
+        TextTransparency = 1,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        ZIndex = 53,
+        Parent = toast,
+    })
+
+    self.tween(toast, 0.18, { BackgroundTransparency = 0 })
+    self.tween(stroke, 0.18, { Transparency = 0.3 })
+    self.tween(bar, 0.18, { BackgroundTransparency = 0 })
+    self.tween(icon, 0.18, { ImageTransparency = 0 })
+    self.tween(label, 0.18, { TextTransparency = 0 })
+
+    local dismissed = false
+    local function dismiss()
+        if dismissed then
+            return
         end
-    end)
+        dismissed = true
+        for index, entry in ipairs(self.toasts) do
+            if entry == toast then
+                table.remove(self.toasts, index)
+                break
+            end
+        end
+        if not toast.Parent then
+            return
+        end
+        self.tween(toast, 0.16, { BackgroundTransparency = 1 })
+        self.tween(stroke, 0.16, { Transparency = 1 })
+        self.tween(bar, 0.16, { BackgroundTransparency = 1 })
+        self.tween(icon, 0.16, { ImageTransparency = 1 })
+        self.tween(label, 0.16, { TextTransparency = 1 })
+        task.delay(0.18, function()
+            if toast.Parent then
+                toast:Destroy()
+            end
+        end)
+    end
+
+    toast.MouseButton1Click:Connect(dismiss)
+    task.delay(duration or 3, dismiss)
 end
 
 function Window:destroy()

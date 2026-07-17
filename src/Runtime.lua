@@ -210,14 +210,6 @@ function Runtime.start(config)
     local manifest = config.manifest
     local UserInputService = game:GetService("UserInputService")
 
-    -- Load the bundled Lucide atlas before any icon renders. This is fully
-    -- guarded: if the filesystem/custom-asset APIs are missing or the fetch
-    -- fails it returns false and every icon falls back to its published
-    -- rbxassetid, so the worst case is identical to not calling it at all.
-    if type(config.fetch) == "function" and type(UI.configureAssets) == "function" then
-        pcall(UI.configureAssets, { fetch = config.fetch })
-    end
-
     local app = {
         alive = true,
         loading = {},
