@@ -118,24 +118,29 @@ KryptUI is custom code and does not embed those libraries.
 
 - Live Explorer, nil-instance, property, attribute, and script-source controls
 - Creates `KryptDbg/DUMP` in the executor workspace at startup
-- Produces `summary.md` (overview with class/location breakdown and usage guide),
+- Produces `summary.md` (overview, deduction guide, and script-authoring steps),
   `game.json`, `session.json` (local player, character, camera, and world
-  state), `locations.jsonl` (named world points with labels, categories, tags,
-  and coordinates), `instances.jsonl` (raw path + readable path, tags, and
-  position), `remotes.jsonl`, `scripts/index.jsonl`, and bounded
-  `scripts/*.lua` files named with parent context
+  state), `locations.jsonl` (labeled/categorized world points),
+  `interactions.jsonl` (ProximityPrompts, ClickDetectors, tools, seats, spawns),
+  `instances.jsonl` (raw + readable paths, tags, position), `remotes.jsonl`,
+  `remotes/calls.jsonl` (captured FireServer/InvokeServer traffic),
+  `remotes/generated/*.lua` (runnable reconstructed call scripts),
+  `scripts/index.jsonl`, `scripts/links.jsonl` (require/remote call sites),
+  and prioritized `scripts/*.lua` sources named with readable parent context
 - Collapses GUID/streaming folder names into `readablePath` values such as
-  `Workspace.STORE_DONUT.Prompt`
+  `Workspace.STORE_DONUT.Prompt`, with humanized `label` fields for deduction
+- Prioritizes PlayerScripts/ReplicatedStorage/client modules when script caps hit
 - Uses Potassium's `getproperties` when present, with curated class-aware
   property discovery as a compatibility fallback
 - Streams large JSONL output with `appendfile` when supported
 - Shows live loader progress and records every safety limit or truncation
 
 The dump is designed as a searchable client-side snapshot for debugging an
-experience you own or are authorized to test. Start an AI review with
-`summary.md`, `locations.jsonl`, and `game.json`, then provide only the
-relevant JSONL records and script files. Prefer `readablePath` over raw
-`path` when searching.
+experience you own or are authorized to test. Capture remotes in the Remotes
+tab first when you need full call arguments. Start an AI review with
+`summary.md`, `remotes/generated`, `locations.jsonl`, and `game.json`, then
+provide only the relevant JSONL records and script files. Prefer
+`readablePath` / `label` over raw `path` when searching.
 
 ## Shortcuts
 

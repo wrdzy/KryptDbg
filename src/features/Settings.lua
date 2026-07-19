@@ -1,12 +1,17 @@
 local Settings = {}
 
-local MAX_INSTANCES_WITH_APPEND = 50000
-local MAX_INSTANCES_WITHOUT_APPEND = 15000
-local MAX_SCRIPTS = 1000
-local MAX_SOURCE_CHARS = 500000
-local MAX_PROPERTIES_PER_INSTANCE = 180
-local MAX_REMOTES = 8000
-local MAX_LOCATIONS = 8000
+local MAX_INSTANCES_WITH_APPEND = 120000
+local MAX_INSTANCES_WITHOUT_APPEND = 40000
+local MAX_SCRIPTS = 5000
+local MAX_SOURCE_CHARS = 2500000
+local MAX_PROPERTIES_PER_INSTANCE = 240
+local MAX_REMOTES = 20000
+local MAX_LOCATIONS = 20000
+local MAX_INTERACTIONS = 12000
+local MAX_CAPTURED_CALLS = 2500
+local MAX_GENERATED_SCRIPTS = 500
+local MAX_SCRIPT_LINKS = 8000
+local MAX_NIL_INSTANCES = 5000
 local FLUSH_EVERY = 200
 
 local TAG_CATEGORIES = {
@@ -14,6 +19,74 @@ local TAG_CATEGORIES = {
     RobberyMarker = "robberyMarker",
     Vehicle = "vehicle",
     VehicleSeat = "vehicleSeat",
+    NPC = "npc",
+    Quest = "quest",
+    Door = "door",
+    Interactable = "interactable",
+    Collectible = "collectible",
+    Checkpoint = "checkpoint",
+    Spawn = "spawn",
+}
+
+local INTERACTION_CLASSES = {
+    ProximityPrompt = "proximityPrompt",
+    ClickDetector = "clickDetector",
+    DragDetector = "dragDetector",
+    Tool = "tool",
+    HopperBin = "tool",
+    Seat = "seat",
+    VehicleSeat = "vehicleSeat",
+    SpawnLocation = "spawn",
+    TouchTransmitter = "touch",
+}
+
+local SERVICE_PRIORITY = {
+    Players = 1,
+    ReplicatedFirst = 2,
+    ReplicatedStorage = 3,
+    StarterPlayer = 4,
+    StarterGui = 5,
+    StarterPack = 6,
+    Workspace = 7,
+    Lighting = 30,
+    SoundService = 31,
+    Chat = 32,
+    TextChatService = 33,
+    Teams = 34,
+    MaterialService = 40,
+}
+
+local LOCATION_NAME_HINTS = {
+    Donut = "robberyMarker",
+    Grocery = "robberyMarker",
+    Gas = "robberyMarker",
+    Bank = "robberyMarker",
+    Jewelry = "robberyMarker",
+    Museum = "robberyMarker",
+    PowerPlant = "robberyMarker",
+    MoneyTruck = "robberyMarker",
+    Mansion = "robberyMarker",
+    OilRig = "robberyMarker",
+    Tomb = "robberyMarker",
+    Casino = "robberyMarker",
+    Register = "interactable",
+    Prompt = "interactable",
+    NPC = "npc",
+    Shop = "shop",
+    Store = "store",
+    Vendor = "shop",
+    Chest = "loot",
+    Crate = "loot",
+    Loot = "loot",
+    Door = "door",
+    Gate = "door",
+    Spawn = "spawn",
+    Checkpoint = "checkpoint",
+    Teleport = "teleport",
+    Vehicle = "vehicle",
+    Car = "vehicle",
+    Boat = "vehicle",
+    Aircraft = "vehicle",
 }
 
 -- Instances worth surfacing in their own index because they define the
@@ -204,7 +277,16 @@ end
 local function humanizeName(name)
     local text = tostring(name)
     text = text:gsub("^STORE_", "")
-    text = text:gsub("_+", " ")
+    text = text:gsub("^REMOTE_", "")
+    text = text:gsub("^RF_", "")
+    text = text:gsub("^RE_", "")
+    text = text:gsub("^BE_", "")
+    text = text:gsub("^BF_", "")
+    text = text:gsub("(%l)(%u)", "%1 %2")
+    text = text:gsub("(%u+)(%u%l)", "%1 %2")
+    text = text:gsub("(%a)(%d)", "%1 %2")
+    text = text:gsub("(%d)(%a)", "%1 %2")
+    text = text:gsub("[_%-%.]+", " ")
     text = text:gsub("%s+", " ")
     text = text:gsub("^%s+", ""):gsub("%s+$", "")
     if text == "" then
@@ -269,11 +351,31 @@ local function getInstanceTags(instance, collectionService)
 end
 
 local function classifyLocation(name, tags, attributes, className, parentName)
+    local interaction = INTERACTION_CLASSES[className]
+    if interaction then
+        return interaction
+    end
     if tags then
         for _, tag in ipairs(tags) do
             local category = TAG_CATEGORIES[tag]
             if category then
                 return category
+            end
+            local lower = tostring(tag):lower()
+            if lower:find("store", 1, true) then
+                return "store"
+            elseif lower:find("vehicle", 1, true) or lower:find("car", 1, true) then
+                return "vehicle"
+            elseif lower:find("npc", 1, true) then
+                return "npc"
+            elseif lower:find("quest", 1, true) then
+                return "quest"
+            elseif lower:find("door", 1, true) then
+                return "door"
+            elseif lower:find("spawn", 1, true) then
+                return "spawn"
+            elseif lower:find("loot", 1, true) or lower:find("collect", 1, true) then
+                return "loot"
             end
         end
         if #tags > 0 then
@@ -284,14 +386,27 @@ local function classifyLocation(name, tags, attributes, className, parentName)
         if attributes.RobberyStatus ~= nil then
             return "robbery"
         end
-        if attributes.VehicleStateUserId ~= nil then
+        if attributes.VehicleStateUserId ~= nil or attributes.OwnerUserId ~= nil then
             return "vehicle"
+        end
+        if attributes.QuestId ~= nil or attributes.ObjectiveId ~= nil then
+            return "quest"
+        end
+        if attributes.DoorId ~= nil or attributes.Locked ~= nil then
+            return "door"
+        end
+        if attributes.Interactable == true or attributes.CanInteract == true then
+            return "interactable"
         end
     end
     if name:sub(1, 6) == "STORE_" then
         return "store"
     end
-    if className == "RemoteEvent" and name == "RobRemote" then
+    if (className == "RemoteEvent" or className == "RemoteFunction")
+        and (name == "RobRemote"
+            or name:lower():find("robbery", 1, true)
+            or name:lower():match("^rob[%u_]") ~= nil)
+    then
         return "storeRemote"
     end
     if (name == "Prompt" or name == "Register" or name == "NPC")
@@ -300,12 +415,50 @@ local function classifyLocation(name, tags, attributes, className, parentName)
     then
         return "storePoint"
     end
-    if name == "Donut" or name == "Grocery" or name == "Gas"
-        or name == "Bank" or name == "Jewelry" or name == "Museum"
-        or name == "PowerPlant" or name == "MoneyTruck" or name == "Mansion"
-        or name == "OilRig" or name == "Tomb" or name == "Casino"
-    then
-        return "robberyMarker"
+    local hint = LOCATION_NAME_HINTS[name]
+    if hint then
+        return hint
+    end
+    local lowerName = name:lower()
+    for needle, category in pairs({
+        store = "store",
+        shop = "shop",
+        vendor = "shop",
+        robbery = "robbery",
+        vehicle = "vehicle",
+        car = "vehicle",
+        boat = "vehicle",
+        plane = "vehicle",
+        heli = "vehicle",
+        npc = "npc",
+        quest = "quest",
+        door = "door",
+        gate = "door",
+        spawn = "spawn",
+        checkpoint = "checkpoint",
+        teleport = "teleport",
+        portal = "teleport",
+        loot = "loot",
+        chest = "loot",
+        crate = "loot",
+        prompt = "interactable",
+        interact = "interactable",
+        button = "interactable",
+    }) do
+        if lowerName:find(needle, 1, true) then
+            return category
+        end
+    end
+    if type(parentName) == "string" then
+        local parentHint = LOCATION_NAME_HINTS[parentName]
+        if parentHint and (name == "Prompt" or name == "Register" or name == "NPC"
+            or name == "PrimaryPart" or INTERACTION_CLASSES[className])
+        then
+            return parentHint .. "Point"
+        end
+        if parentName:sub(1, 6) == "STORE_" then
+            return "storePoint"
+        end
     end
     return nil
 end
@@ -316,7 +469,7 @@ local function cleanFileName(value)
     if clean == "" then
         clean = "unnamed"
     end
-    return clean:sub(1, 80)
+    return clean:sub(1, 120)
 end
 
 local function scriptFileStem(readable, name)
@@ -325,6 +478,9 @@ local function scriptFileStem(readable, name)
         if part ~= "game" and not looksLikeOpaqueId(part) then
             table.insert(parts, part)
         end
+    end
+    if #parts >= 3 then
+        return cleanFileName(parts[#parts - 2] .. "_" .. parts[#parts - 1] .. "_" .. parts[#parts])
     end
     if #parts >= 2 then
         return cleanFileName(parts[#parts - 1] .. "_" .. parts[#parts])
@@ -335,10 +491,102 @@ local function scriptFileStem(readable, name)
     return cleanFileName(name)
 end
 
+local function scriptPriority(instance, className, readable)
+    local score = 0
+    if className == "ModuleScript" then
+        score = score + 40
+    elseif className == "LocalScript" then
+        score = score + 35
+    else
+        score = score + 10
+    end
+    local pathText = tostring(readable or "")
+    if pathText:find("PlayerScripts", 1, true) or pathText:find("PlayerGui", 1, true) then
+        score = score + 50
+    elseif pathText:find("ReplicatedFirst", 1, true) then
+        score = score + 45
+    elseif pathText:find("ReplicatedStorage", 1, true) then
+        score = score + 40
+    elseif pathText:find("StarterPlayer", 1, true) or pathText:find("StarterGui", 1, true) then
+        score = score + 35
+    elseif pathText:find("Workspace", 1, true) then
+        score = score + 15
+    end
+    local lower = pathText:lower()
+    for _, needle in ipairs({
+        "remote",
+        "network",
+        "net",
+        "client",
+        "controller",
+        "handler",
+        "service",
+        "ui",
+        "shop",
+        "store",
+        "vehicle",
+        "inventory",
+        "quest",
+    }) do
+        if lower:find(needle, 1, true) then
+            score = score + 8
+        end
+    end
+    local depth = 0
+    for _ in string.gmatch(pathText, "[^%.]+") do
+        depth = depth + 1
+    end
+    score = score + math.max(0, 12 - depth)
+    pcall(function()
+        if instance:IsDescendantOf(game:GetService("Players")) then
+            score = score + 20
+        end
+    end)
+    return score
+end
+
+local function extractRemoteLinks(source)
+    local links = {}
+    local seen = {}
+    local function add(target, method, kind)
+        local key = method .. "|" .. target .. "|" .. kind
+        if seen[key] or #links >= 40 then
+            return
+        end
+        seen[key] = true
+        table.insert(links, {
+            target = safeString(target),
+            method = method,
+            kind = kind,
+        })
+    end
+    for target, method in string.gmatch(source, "([%w_%.]+)%s*:%s*(FireServer|InvokeServer)%s*%(") do
+        add(target, method, "namecall")
+    end
+    for method, target in string.gmatch(source, "%.(FireServer|InvokeServer)%s*%(%s*([%w_%.]+)") do
+        add(target, method, "call")
+    end
+    for name in string.gmatch(source, "WaitForChild%s*%(%s*[\"']([%w_]+)[\"']") do
+        local lower = name:lower()
+        if lower:find("remote", 1, true)
+            or lower:find("event", 1, true)
+            or lower:find("function", 1, true)
+            or lower:find("rf", 1, true)
+            or lower:find("re", 1, true)
+        then
+            add(name, "WaitForChild", "lookup")
+        end
+    end
+    for path in string.gmatch(source, "require%s*%(%s*([%w_%.]+)%s*%)") do
+        add(path, "require", "module")
+    end
+    return links
+end
+
 local function encodeValue(value, depth, seen)
     depth = depth or 0
     seen = seen or {}
-    if depth > 5 then
+    if depth > 8 then
         return "<depth-limit>"
     end
 
@@ -400,7 +648,7 @@ local function encodeValue(value, depth, seen)
         local count = 0
         for key, nested in pairs(value) do
             count = count + 1
-            if count > 200 then
+            if count > 400 then
                 result.__truncated = true
                 break
             end
@@ -663,7 +911,7 @@ function Settings.mount(ctx)
         Position = UDim2.fromOffset(0, 44),
         Size = UDim2.new(1, 0, 0, 40),
         Text = ctx.workspace.available
-            and "Workspace ready. Dumps contain metadata, session context, a JSONL instance tree, a remote index, attributes, selected properties, and available script sources."
+            and "Workspace ready. Dumps include session context, locations, interactions, remotes, captured call scripts, prioritized script sources, and deduction-friendly names."
             or "Filesystem APIs are unavailable. makefolder and writefile are required.",
         TextColor3 = ctx.workspace.available and Theme.textMuted or Theme.red,
         TextSize = 11,
@@ -860,8 +1108,12 @@ function Settings.mount(ctx)
                 )
                 local rootPath = ctx.workspace.dump .. "/" .. dumpName
                 local scriptsPath = rootPath .. "/scripts"
+                local remotesDir = rootPath .. "/remotes"
+                local generatedPath = remotesDir .. "/generated"
                 ensure(rootPath)
                 ensure(scriptsPath)
+                ensure(remotesDir)
+                ensure(generatedPath)
 
                 local HttpService = ctx.services.HttpService
                 -- Belt-and-suspenders around the sanitizers: never let a single
@@ -875,12 +1127,18 @@ function Settings.mount(ctx)
                 end
                 local instancesPath = rootPath .. "/instances.jsonl"
                 local remotesPath = rootPath .. "/remotes.jsonl"
+                local callsPath = remotesDir .. "/calls.jsonl"
                 local locationsPath = rootPath .. "/locations.jsonl"
+                local interactionsPath = rootPath .. "/interactions.jsonl"
                 local scriptIndexPath = rootPath .. "/scripts/index.jsonl"
+                local scriptLinksPath = rootPath .. "/scripts/links.jsonl"
                 write(instancesPath, "")
                 write(remotesPath, "")
+                write(callsPath, "")
                 write(locationsPath, "")
+                write(interactionsPath, "")
                 write(scriptIndexPath, "")
+                write(scriptLinksPath, "")
                 local collectionService
                 pcall(function()
                     collectionService = game:GetService("CollectionService")
@@ -917,14 +1175,19 @@ function Settings.mount(ctx)
                 local scripts = {}
                 local remotes = {}
                 local locations = {}
+                local interactions = {}
                 local classCounts = {}
                 local remoteCount = 0
                 local bindableCount = 0
                 local nilInstanceCount = 0
                 local locationCount = 0
+                local interactionCount = 0
                 local instanceLines = {}
                 local locationLines = {}
+                local interactionLines = {}
                 local usedScriptNames = {}
+                local scriptsCapped = false
+                local sourcesTruncated = 0
                 local head = 1
                 local count = 0
                 local truncated = false
@@ -932,7 +1195,7 @@ function Settings.mount(ctx)
                 if ctx.settings.includeNilInstances and type(getNilInstances) == "function" then
                     local nilOk, nilInstances = pcall(getNilInstances)
                     if nilOk and type(nilInstances) == "table" then
-                        for index = 1, math.min(#nilInstances, 2000) do
+                        for index = 1, math.min(#nilInstances, MAX_NIL_INSTANCES) do
                             if typeof(nilInstances[index]) == "Instance" then
                                 table.insert(queue, {
                                     instance = nilInstances[index],
@@ -1037,9 +1300,12 @@ function Settings.mount(ctx)
                                 attributes = encodedAttributes,
                                 nilInstance = record.nilInstance,
                             }
-                            if parentName and parentName:sub(1, 6) == "STORE_" then
+                            if parentName and not looksLikeOpaqueId(parentName) then
                                 locationRecord.parentLabel = humanizeName(parentName)
                                 locationRecord.parentName = safeString(parentName)
+                                if instance.Parent then
+                                    locationRecord.parentReadablePath = readablePath(instance.Parent)
+                                end
                             end
                             local encodedLocation = safeEncode(locationRecord)
                             if encodedLocation then
@@ -1048,6 +1314,56 @@ function Settings.mount(ctx)
                             end
                             if #locationLines >= FLUSH_EVERY then
                                 appendLines(locationsPath, locationLines)
+                            end
+                        end
+
+                        local interactionCategory = INTERACTION_CLASSES[className]
+                        if interactionCategory and interactionCount < MAX_INTERACTIONS then
+                            interactionCount = interactionCount + 1
+                            local interactionRecord = {
+                                instanceId = id,
+                                name = record.name,
+                                label = humanizeName(record.name),
+                                category = interactionCategory,
+                                className = className,
+                                path = record.path,
+                                readablePath = record.readablePath,
+                                tags = tags,
+                                position = position,
+                                nilInstance = record.nilInstance,
+                            }
+                            if parentName and not looksLikeOpaqueId(parentName) then
+                                interactionRecord.parentLabel = humanizeName(parentName)
+                                interactionRecord.parentName = safeString(parentName)
+                                if instance.Parent then
+                                    interactionRecord.parentReadablePath = readablePath(instance.Parent)
+                                end
+                            end
+                            if className == "ProximityPrompt" then
+                                pcall(function()
+                                    interactionRecord.actionText = safeString(instance.ActionText)
+                                    interactionRecord.objectText = safeString(instance.ObjectText)
+                                    interactionRecord.holdDuration = instance.HoldDuration
+                                    interactionRecord.requiresLineOfSight = instance.RequiresLineOfSight
+                                    interactionRecord.maxActivationDistance = instance.MaxActivationDistance
+                                end)
+                            elseif className == "ClickDetector" then
+                                pcall(function()
+                                    interactionRecord.maxActivationDistance = instance.MaxActivationDistance
+                                end)
+                            elseif className == "Tool" then
+                                pcall(function()
+                                    interactionRecord.toolTip = safeString(instance.ToolTip)
+                                    interactionRecord.requiresHandle = instance.RequiresHandle
+                                end)
+                            end
+                            local encodedInteraction = safeEncode(interactionRecord)
+                            if encodedInteraction then
+                                table.insert(interactionLines, encodedInteraction)
+                                table.insert(interactions, interactionRecord)
+                            end
+                            if #interactionLines >= FLUSH_EVERY then
+                                appendLines(interactionsPath, interactionLines)
                             end
                         end
 
@@ -1062,6 +1378,7 @@ function Settings.mount(ctx)
                                 table.insert(remotes, {
                                     instanceId = id,
                                     name = record.name,
+                                    label = humanizeName(record.name),
                                     className = className,
                                     path = record.path,
                                     readablePath = record.readablePath,
@@ -1076,7 +1393,7 @@ function Settings.mount(ctx)
                             instance,
                             "LuaSourceContainer"
                         )
-                        if scriptOk and isScript and #scripts < MAX_SCRIPTS then
+                        if scriptOk and isScript then
                             table.insert(scripts, {
                                 instance = instance,
                                 instanceId = id,
@@ -1084,13 +1401,24 @@ function Settings.mount(ctx)
                                 readablePath = record.readablePath,
                                 className = className,
                                 name = record.name,
+                                priority = scriptPriority(instance, className, record.readablePath),
                             })
                         end
 
                         local childrenOk, children = pcall(instance.GetChildren, instance)
                         if childrenOk then
+                            if instance == game then
+                                table.sort(children, function(left, right)
+                                    local leftRank = SERVICE_PRIORITY[left.Name] or 50
+                                    local rightRank = SERVICE_PRIORITY[right.Name] or 50
+                                    if leftRank == rightRank then
+                                        return tostring(left.Name) < tostring(right.Name)
+                                    end
+                                    return leftRank < rightRank
+                                end)
+                            end
                             for _, child in ipairs(children) do
-                                if #queue < instanceLimit + 4000 then
+                                if #queue < instanceLimit + 8000 then
                                     table.insert(queue, {
                                         instance = child,
                                         parentId = id,
@@ -1119,6 +1447,7 @@ function Settings.mount(ctx)
                 end
                 appendLines(instancesPath, instanceLines)
                 appendLines(locationsPath, locationLines)
+                appendLines(interactionsPath, interactionLines)
 
                 local remoteLines = {}
                 for _, remote in ipairs(remotes) do
@@ -1129,8 +1458,26 @@ function Settings.mount(ctx)
                 end
                 appendLines(remotesPath, remoteLines)
 
+                local discoveredScriptCount = #scripts
+                table.sort(scripts, function(left, right)
+                    if left.priority == right.priority then
+                        return tostring(left.readablePath) < tostring(right.readablePath)
+                    end
+                    return left.priority > right.priority
+                end)
+                if #scripts > MAX_SCRIPTS then
+                    scriptsCapped = true
+                    local trimmed = table.create(MAX_SCRIPTS)
+                    for index = 1, MAX_SCRIPTS do
+                        trimmed[index] = scripts[index]
+                    end
+                    scripts = trimmed
+                end
+
                 local scriptLines = {}
+                local linkLines = {}
                 local dumpedSources = 0
+                local linkCount = 0
                 for index, item in ipairs(scripts) do
                     if not ctx.app.alive then
                         error("Dump cancelled because KryptDbg closed")
@@ -1160,11 +1507,14 @@ function Settings.mount(ctx)
 
                     local filename
                     local sourceTruncated = false
+                    local links
                     if source then
                         if #source > MAX_SOURCE_CHARS then
                             source = source:sub(1, MAX_SOURCE_CHARS)
                             sourceTruncated = true
+                            sourcesTruncated = sourcesTruncated + 1
                         end
+                        links = extractRemoteLinks(source)
                         local stem = scriptFileStem(item.readablePath, item.name)
                         filename = ("%04d_%s_%s.lua"):format(
                             index,
@@ -1182,6 +1532,30 @@ function Settings.mount(ctx)
                         usedScriptNames[filename] = true
                         write(scriptsPath .. "/" .. filename, source)
                         dumpedSources = dumpedSources + 1
+                        if links and #links > 0 and linkCount < MAX_SCRIPT_LINKS then
+                            for _, link in ipairs(links) do
+                                if linkCount >= MAX_SCRIPT_LINKS then
+                                    break
+                                end
+                                linkCount = linkCount + 1
+                                local encodedLink = safeEncode({
+                                    scriptInstanceId = item.instanceId,
+                                    scriptName = safeString(item.name),
+                                    scriptLabel = humanizeName(item.name),
+                                    scriptReadablePath = safeString(item.readablePath or item.path),
+                                    file = filename,
+                                    target = link.target,
+                                    method = link.method,
+                                    kind = link.kind,
+                                })
+                                if encodedLink then
+                                    table.insert(linkLines, encodedLink)
+                                end
+                            end
+                            if #linkLines >= FLUSH_EVERY then
+                                appendLines(scriptLinksPath, linkLines)
+                            end
+                        end
                     end
                     local encodedScript = safeEncode({
                         instanceId = item.instanceId,
@@ -1193,6 +1567,8 @@ function Settings.mount(ctx)
                         file = filename,
                         sourceMethod = sourceMethod,
                         truncated = sourceTruncated,
+                        priority = item.priority,
+                        linkCount = links and #links or 0,
                     })
                     if encodedScript then
                         table.insert(scriptLines, encodedScript)
@@ -1212,6 +1588,82 @@ function Settings.mount(ctx)
                     end
                 end
                 appendLines(scriptIndexPath, scriptLines)
+                appendLines(scriptLinksPath, linkLines)
+
+                loader:setDetail("Exporting captured remote calls...")
+                local capturedCalls = 0
+                local generatedScripts = 0
+                local uniqueCaptured = 0
+                local remotesController = ctx:getFeatureController("Remotes")
+                if (not remotesController or type(remotesController.getDumpSnapshot) ~= "function")
+                    and type(ctx.app.loadFeature) == "function"
+                    and not ctx.app.loaded.Remotes
+                then
+                    pcall(function()
+                        ctx.app:loadFeature("Remotes")
+                    end)
+                    local deadline = os.clock() + 4
+                    while not ctx.app.loaded.Remotes and os.clock() < deadline do
+                        task.wait(0.05)
+                    end
+                    remotesController = ctx:getFeatureController("Remotes")
+                end
+                if remotesController and type(remotesController.getDumpSnapshot) == "function" then
+                    local snapOk, snapshot = pcall(remotesController.getDumpSnapshot)
+                    if snapOk and type(snapshot) == "table" then
+                        uniqueCaptured = tonumber(snapshot.unique) or 0
+                        local callLines = {}
+                        local usedGeneratedNames = {}
+                        local calls = snapshot.calls or {}
+                        for index = 1, math.min(#calls, MAX_CAPTURED_CALLS) do
+                            local call = calls[index]
+                            capturedCalls = capturedCalls + 1
+                            local file
+                            if type(call.code) == "string" and call.code ~= ""
+                                and generatedScripts < MAX_GENERATED_SCRIPTS
+                            then
+                                generatedScripts = generatedScripts + 1
+                                local stem = cleanFileName(
+                                    (call.method or "Call")
+                                        .. "_"
+                                        .. (call.name or "Remote")
+                                )
+                                file = ("%04d_%s.lua"):format(generatedScripts, stem)
+                                if usedGeneratedNames[file] then
+                                    file = ("%04d_%s_%d.lua"):format(
+                                        generatedScripts,
+                                        stem,
+                                        call.id or generatedScripts
+                                    )
+                                end
+                                usedGeneratedNames[file] = true
+                                write(generatedPath .. "/" .. file, call.code)
+                            end
+                            local encodedCall = safeEncode({
+                                id = call.id,
+                                name = safeString(call.name),
+                                label = humanizeName(call.name),
+                                className = safeString(call.className),
+                                method = call.method,
+                                path = safeString(call.path),
+                                readablePath = safeString(call.readablePath or call.path),
+                                argCount = call.argCount,
+                                args = call.args,
+                                count = call.count,
+                                time = call.time,
+                                fingerprint = call.fingerprint,
+                                file = file and ("remotes/generated/" .. file) or nil,
+                            })
+                            if encodedCall then
+                                table.insert(callLines, encodedCall)
+                            end
+                            if #callLines >= FLUSH_EVERY then
+                                appendLines(callsPath, callLines)
+                            end
+                        end
+                        appendLines(callsPath, callLines)
+                    end
+                end
 
                 for path, chunks in pairs(buffered) do
                     write(path, table.concat(chunks))
@@ -1333,7 +1785,7 @@ function Settings.mount(ctx)
                 write(rootPath .. "/session.json", sessionJson)
 
                 local metadata = {
-                    formatVersion = 1,
+                    formatVersion = 2,
                     generatedAt = timestamp,
                     executor = safeString(ctx.app.executorName),
                     placeId = placeId,
@@ -1344,13 +1796,31 @@ function Settings.mount(ctx)
                     instanceCount = count,
                     instanceLimit = instanceLimit,
                     instanceTreeTruncated = truncated,
+                    discoveredScriptCount = discoveredScriptCount,
                     scriptCount = #scripts,
+                    scriptsCapped = scriptsCapped,
                     dumpedScriptSources = dumpedSources,
+                    sourcesTruncated = sourcesTruncated,
+                    scriptLinkCount = linkCount,
                     remoteCount = remoteCount,
                     bindableCount = bindableCount,
                     remoteIndexCount = #remotes,
+                    capturedCallCount = capturedCalls,
+                    uniqueCapturedCallCount = uniqueCaptured,
+                    generatedRemoteScriptCount = generatedScripts,
                     locationCount = locationCount,
+                    interactionCount = interactionCount,
                     nilInstanceCount = nilInstanceCount,
+                    limits = {
+                        instances = instanceLimit,
+                        scripts = MAX_SCRIPTS,
+                        sourceChars = MAX_SOURCE_CHARS,
+                        remotes = MAX_REMOTES,
+                        locations = MAX_LOCATIONS,
+                        interactions = MAX_INTERACTIONS,
+                        capturedCalls = MAX_CAPTURED_CALLS,
+                        generatedScripts = MAX_GENERATED_SCRIPTS,
+                    },
                     distinctClassCount = (function()
                         local total = 0
                         for _ in pairs(classCounts) do
@@ -1365,8 +1835,13 @@ function Settings.mount(ctx)
                         "session.json",
                         "instances.jsonl",
                         "locations.jsonl",
+                        "interactions.jsonl",
                         "remotes.jsonl",
+                        "remotes/calls.jsonl",
+                        "remotes/generated/*.lua",
                         "scripts/index.jsonl",
+                        "scripts/links.jsonl",
+                        "scripts/*.lua",
                     },
                     options = {
                         attributes = ctx.settings.dumpAttributes,
@@ -1416,10 +1891,22 @@ function Settings.mount(ctx)
                         truncated and " (truncated at safety limit)" or ""
                     ),
                     ("- Distinct classes: %d"):format(#sortedClasses),
-                    ("- Scripts indexed: %d (%d sources saved)"):format(#scripts, dumpedSources),
+                    ("- Scripts discovered: %d | indexed: %d%s | sources saved: %d"):format(
+                        discoveredScriptCount,
+                        #scripts,
+                        scriptsCapped and " (priority-capped)" or "",
+                        dumpedSources
+                    ),
+                    ("- Script remote/module links: %d"):format(linkCount),
                     ("- Client/server remotes: %d"):format(remoteCount),
                     ("- Bindable events/functions: %d"):format(bindableCount),
+                    ("- Captured remote calls: %d (%d unique, %d generated scripts)"):format(
+                        capturedCalls,
+                        uniqueCaptured,
+                        generatedScripts
+                    ),
                     ("- Named locations: %d"):format(locationCount),
+                    ("- Interactions (prompts/tools/seats/spawns): %d"):format(interactionCount),
                     ("- Nil-parented instances: %d"):format(nilInstanceCount),
                     "",
                     "## Files",
@@ -1428,10 +1915,14 @@ function Settings.mount(ctx)
                     "- `game.json`: place metadata, options, counts, limits, and the file list.",
                     "- `session.json`: local player, character, camera, and world state.",
                     "- `locations.jsonl`: named world points with labels, categories, tags, and positions.",
+                    "- `interactions.jsonl`: ProximityPrompts, ClickDetectors, tools, seats, and spawns.",
                     "- `instances.jsonl`: one instance per line with hierarchy IDs, readable paths, tags, positions, attributes, and properties.",
-                    "- `remotes.jsonl`: every RemoteEvent/RemoteFunction and Bindable with raw and readable paths.",
-                    "- `scripts/index.jsonl`: script paths, labels, and source-file mapping.",
-                    "- `scripts/*.lua`: available bounded script sources (named with parent context).",
+                    "- `remotes.jsonl`: every RemoteEvent/RemoteFunction and Bindable with labels and readable paths.",
+                    "- `remotes/calls.jsonl`: captured FireServer/InvokeServer traffic from this session.",
+                    "- `remotes/generated/*.lua`: runnable Luau reconstructed from captured calls.",
+                    "- `scripts/index.jsonl`: prioritized script paths, labels, and source-file mapping.",
+                    "- `scripts/links.jsonl`: FireServer/InvokeServer/require/WaitForChild links found in sources.",
+                    "- `scripts/*.lua`: available script sources named with readable parent context.",
                     "",
                     "## Top classes",
                     "",
@@ -1505,17 +1996,67 @@ function Settings.mount(ctx)
                         )
                     end
                 end
+                if #interactions > 0 then
+                    table.insert(summary, "")
+                    table.insert(summary, "## Interactions")
+                    table.insert(summary, "")
+                    local byInteraction = {}
+                    for _, interaction in ipairs(interactions) do
+                        local category = interaction.category or "other"
+                        byInteraction[category] = (byInteraction[category] or 0) + 1
+                    end
+                    local interactionList = {}
+                    for category, amount in pairs(byInteraction) do
+                        table.insert(interactionList, { category = category, amount = amount })
+                    end
+                    table.sort(interactionList, function(left, right)
+                        if left.amount == right.amount then
+                            return left.category < right.category
+                        end
+                        return left.amount > right.amount
+                    end)
+                    for _, entry in ipairs(interactionList) do
+                        table.insert(
+                            summary,
+                            ("- %s x %d"):format(entry.category, entry.amount)
+                        )
+                    end
+                    table.insert(summary, "")
+                    table.insert(summary, "### Sample interactions")
+                    table.insert(summary, "")
+                    for index = 1, math.min(#interactions, 40) do
+                        local interaction = interactions[index]
+                        table.insert(
+                            summary,
+                            ("- `%s` · %s · `%s`"):format(
+                                interaction.label or interaction.name,
+                                interaction.category or "other",
+                                interaction.readablePath or interaction.path
+                            )
+                        )
+                    end
+                    if #interactions > 40 then
+                        table.insert(
+                            summary,
+                            ("- ... and %d more (see interactions.jsonl)"):format(
+                                #interactions - 40
+                            )
+                        )
+                    end
+                end
                 for _, line in ipairs({
                     "",
-                    "## How to use this dump",
+                    "## How to author a script from this dump",
                     "",
-                    "1. Read this summary and `game.json` for shape and scale.",
-                    "2. Use `locations.jsonl` for human labels, categories, tags, and coordinates.",
-                    "3. Prefer `readablePath` over raw `path` when GUID streaming folders appear.",
-                    "4. Use `remotes.jsonl` to map the client/server surface.",
-                    "5. Search `instances.jsonl` by readablePath, tags, or name for the subsystem you care about.",
-                    "6. Open only the relevant `scripts/*.lua` via `scripts/index.jsonl`.",
+                    "1. Read this summary and `game.json` for shape, caps, and what was truncated.",
+                    "2. Prefer `readablePath` / `label` over raw `path` / GUID folders.",
+                    "3. Start with `remotes/generated/*.lua` and `remotes/calls.jsonl` for real call shapes.",
+                    "4. Use `interactions.jsonl` and `locations.jsonl` to connect prompts/tools to parents.",
+                    "5. Map handlers with `scripts/links.jsonl`, then open only matching `scripts/*.lua`.",
+                    "6. Fill gaps from `remotes.jsonl` when a remote exists but was never captured live.",
+                    "7. Keep executable Instance paths from generated Luau; use readablePath for reasoning.",
                     "",
+                    "Capture remote traffic in the Remotes tab before dumping whenever you need full call args.",
                     "Treat every runtime value as a client-side snapshot from a single moment.",
                 }) do
                     table.insert(summary, line)
@@ -1528,7 +2069,10 @@ function Settings.mount(ctx)
                     sources = dumpedSources,
                     remotes = remoteCount,
                     locations = locationCount,
-                    truncated = truncated,
+                    interactions = interactionCount,
+                    capturedCalls = capturedCalls,
+                    generatedScripts = generatedScripts,
+                    truncated = truncated or scriptsCapped,
                 }
             end)
 
@@ -1545,14 +2089,17 @@ function Settings.mount(ctx)
             if ok then
                 folderLabel.Text = result.path
                 dumpStatus.Text = (
-                    "Dump complete.\n%d instances | %d locations | %d scripts | %d sources | %d remotes%s"
+                    "Dump complete.\n%d instances | %d locations | %d interactions | %d scripts | %d sources | %d remotes | %d captured calls | %d generated scripts%s"
                 ):format(
                     result.count,
                     result.locations or 0,
+                    result.interactions or 0,
                     result.scripts,
                     result.sources,
                     result.remotes,
-                    result.truncated and "\nSafety limit reached; see summary.md." or ""
+                    result.capturedCalls or 0,
+                    result.generatedScripts or 0,
+                    result.truncated and "\nSafety/priority limit reached; see summary.md." or ""
                 )
                 dumpStatus.TextColor3 = Theme.green
                 ctx:status("AI debug dump complete", Theme.green)

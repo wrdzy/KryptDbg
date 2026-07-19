@@ -31,7 +31,7 @@ function Remotes.mount(ctx)
         nextId = 0,
         renderDirty = false,
         renderScheduled = false,
-        maxLogs = 500,
+        maxLogs = 2500,
         blockedInstances = setmetatable({}, { __mode = "k" }),
         blockedNames = {},
         excludedInstances = setmetatable({}, { __mode = "k" }),
@@ -231,7 +231,10 @@ function Remotes.mount(ctx)
     end
 
     local function generate(entry)
+        local readable = ctx:readablePath(entry.remote)
         local lines = {
+            ("-- %s"):format(readable),
+            ("-- %s · %s"):format(entry.remote.ClassName, entry.method),
             "local remote = " .. ctx:path(entry.remote),
             "local args = {",
         }
@@ -246,6 +249,72 @@ function Remotes.mount(ctx)
             ("remote:%s(table.unpack(args, 1, args.n))"):format(entry.method)
         )
         return table.concat(lines, "\n")
+    end
+
+    local function encodeArgPreview(value)
+        local kind = typeof(value)
+        if kind == "Instance" then
+            return {
+                type = "Instance",
+                className = value.ClassName,
+                path = ctx:path(value),
+                readablePath = ctx:readablePath(value),
+                name = value.Name,
+            }
+        elseif kind == "table" then
+            return "table"
+        elseif kind == "string" then
+            local text = value
+            if #text > 200 then
+                text = text:sub(1, 200) .. "…"
+            end
+            return text
+        elseif kind == "number" or kind == "boolean" or kind == "nil" then
+            return value
+        end
+        return tostring(value)
+    end
+
+    local function getDumpSnapshot()
+        local calls = {}
+        local unique = {}
+        local uniqueOrder = {}
+        for _, entry in ipairs(state.logs) do
+            if typeof(entry.remote) == "Instance" then
+                local code = entry.code or generate(entry)
+                entry.code = code
+                local argCount = entry.args.n or #entry.args
+                local args = table.create(argCount)
+                for index = 1, argCount do
+                    args[index] = encodeArgPreview(entry.args[index])
+                end
+                local record = {
+                    id = entry.id,
+                    name = entry.remote.Name,
+                    className = entry.remote.ClassName,
+                    method = entry.method,
+                    path = ctx:path(entry.remote),
+                    readablePath = ctx:readablePath(entry.remote),
+                    argCount = argCount,
+                    args = args,
+                    count = entry.count,
+                    time = entry.time,
+                    fingerprint = entry.fingerprint,
+                    code = code,
+                }
+                table.insert(calls, record)
+                if not unique[entry.fingerprint] then
+                    unique[entry.fingerprint] = record
+                    table.insert(uniqueOrder, record)
+                end
+            end
+        end
+        return {
+            total = #calls,
+            unique = #uniqueOrder,
+            calls = calls,
+            uniqueCalls = uniqueOrder,
+        }
     end
 
     local function matches(entry)
@@ -280,7 +349,7 @@ function Remotes.mount(ctx)
         end
 
         selectedName.Text = entry.remote.Name
-        selectedPath.Text = ctx:path(entry.remote)
+        selectedPath.Text = ctx:readablePath(entry.remote)
         selectedMeta.Text = ("%d arguments · captured %s · repeated %d×"):format(
             entry.args.n or #entry.args,
             os.date("%H:%M:%S", entry.time),
@@ -657,6 +726,7 @@ function Remotes.mount(ctx)
     selectEntry(nil)
 
     return {
+        getDumpSnapshot = getDumpSnapshot,
         destroy = function()
             if type(hookMetamethod) == "function" and type(oldNamecall) == "function" then
                 pcall(hookMetamethod, game, "__namecall", oldNamecall)

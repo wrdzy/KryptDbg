@@ -151,13 +151,25 @@ if (!runtimeSource.includes("identifyexecutor")
   failed = true;
 }
 if (!runtimeSource.includes('dump = "KryptDbg/DUMP"')
+  || !runtimeSource.includes("readablePath")
+  || !runtimeSource.includes("getFeatureController")
   || !settingsSource.includes("instances.jsonl")
   || !settingsSource.includes("scripts/index.jsonl")
+  || !settingsSource.includes("scripts/links.jsonl")
+  || !settingsSource.includes("interactions.jsonl")
+  || !settingsSource.includes("remotes/calls.jsonl")
+  || !settingsSource.includes("remotes/generated")
   || !settingsSource.includes("MAX_INSTANCES_WITH_APPEND")
   || !settingsSource.includes("dumpScriptSources")
   || !settingsSource.includes('executorFunction("getproperties")')
 ) {
   console.error("settings: bounded AI debug dump contract is incomplete");
+  failed = true;
+}
+if (!remotesSource.includes("getDumpSnapshot")
+  || !remotesSource.includes("maxLogs = 2500")
+) {
+  console.error("remotes: dump snapshot contract is incomplete");
   failed = true;
 }
 if (!uiSource.includes("clampPosition")

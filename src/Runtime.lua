@@ -10,6 +10,19 @@ local function isIdentifier(value)
     return type(value) == "string" and value:match("^[%a_][%w_]*$") ~= nil
 end
 
+local function looksLikeOpaqueId(name)
+    local text = tostring(name)
+    if #text == 36 and text:match(
+        "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$"
+    ) then
+        return true
+    end
+    if #text >= 32 and #text <= 40 and text:find("%-", 1, true) and text:match("^[%x%-]+$") then
+        return true
+    end
+    return false
+end
+
 local function instancePath(instance)
     if typeof(instance) ~= "Instance" then
         return "nil"
@@ -30,11 +43,37 @@ local function instancePath(instance)
     return "game" .. table.concat(parts)
 end
 
+local function readablePath(instance)
+    if typeof(instance) ~= "Instance" then
+        return "nil"
+    end
+    if instance == game then
+        return "game"
+    end
+    local chain = {}
+    local current = instance
+    while current and current ~= game do
+        table.insert(chain, 1, current)
+        current = current.Parent
+    end
+    local segments = {}
+    for _, node in ipairs(chain) do
+        local name = tostring(node.Name)
+        if node.Parent == game or not looksLikeOpaqueId(name) then
+            table.insert(segments, name)
+        end
+    end
+    if #segments == 0 then
+        return tostring(instance.Name)
+    end
+    return table.concat(segments, ".")
+end
+
 local function serialize(value, depth, seen)
     depth = depth or 0
     seen = seen or {}
 
-    if depth > 7 then
+    if depth > 12 then
         return "nil --[[ depth limit ]]"
     end
 
@@ -89,7 +128,7 @@ local function serialize(value, depth, seen)
         local count = 0
         for key, nested in pairs(value) do
             count = count + 1
-            if count > 100 then
+            if count > 250 then
                 table.insert(lines, "    --[[ item limit ]]")
                 break
             end
@@ -403,12 +442,21 @@ function Runtime.start(config)
             return instancePath(instance)
         end
 
+        function context:readablePath(instance)
+            return readablePath(instance)
+        end
+
         function context:setSetting(key, value)
             app:setSetting(key, value)
         end
 
         function context:serialize(value)
             return serialize(value)
+        end
+
+        function context:getFeatureController(id)
+            local entry = app.modules[id]
+            return entry and entry.controller or nil
         end
 
         function context:destroy()
